@@ -1,0 +1,80 @@
+{
+  "manifest_version": 3,
+  "name": "MySearchPage UA Controller",
+  "version": "1.0.0",
+  "description": "按站点控制 User-Agent，支持桌面UA下手机UI布局",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "tabs",
+    "scripting",
+    "declarativeNetRequest"
+  ],
+  "host_permissions": [
+    "*://*.bilibili.com/*",
+    "*://*.douyin.com/*",
+    "*://*.youtube.com/*",
+    "*://*.google.com/*",
+    "*://*.google.com.hk/*",
+    "*://*.xiaohongshu.com/*",
+    "*://*.zhihu.com/*",
+    "*://*.baidu.com/*",
+    "*://*.bing.com/*",
+    "*://*.twitter.com/*",
+    "*://*.x.com/*",
+    "*://*.github.com/*",
+    "*://*.taobao.com/*",
+    "*://*.jd.com/*",
+    "*://*.ximalaya.com/*"
+  ],
+  "background": {
+    "service_worker": "background/ua-controller.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.bilibili.com/*"],
+      "js": [
+        "shared/constants.js",
+        "shared/utils.js",
+        "content/ui-transformer.js",
+        "content/sites/bilibili.js"
+      ],
+      "css": ["content/styles/bilibili-mobile.css"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["*://*.douyin.com/*"],
+      "js": [
+        "shared/constants.js",
+        "shared/utils.js",
+        "content/ui-transformer.js",
+        "content/sites/douyin.js"
+      ],
+      "css": ["content/styles/douyin-mobile.css"],
+      "run_at": "document_start"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_page": "options/options.html",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "ua_rules",
+        "enabled": true,
+        "path": "rules/ua-rules.json"
+      }
+    ]
+  }
+}

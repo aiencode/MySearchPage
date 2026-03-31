@@ -1159,6 +1159,7 @@
                 <button id="sync-gitee">上传</button>
                 <button id="sync-from-gitee">下载</button>
                 <button id="gitee-config">备份设置</button>
+                <button id="export-ua-rules">导出UA规则</button>
             </div>
             <div class="btn-group">
                 <!-- 按钮将通过 JavaScript 从 IndexedDB 动态生成 -->
@@ -3715,7 +3716,7 @@
             const controlButtons = ['save-only', 'all-sites', 'common-sites', 'foreign-sites',
                 'edit-history', 'export-history', 'import-history',
                 'sort-by-name', 'sort-by-time', 'sort-by-length', 'sort-by-first-time', 'sort-by-count',
-                'sync-gitee', 'sync-from-gitee', 'gitee-config', 'mobile-esc-btn'];
+                'sync-gitee', 'sync-from-gitee', 'gitee-config', 'export-ua-rules', 'mobile-esc-btn'];
             if (e.key === 'Enter' && currentFocusElement && controlButtons.includes(currentFocusElement.id) && !isSettingsModalOpen()) {
                 e.preventDefault();
                 currentFocusElement.click();
@@ -5419,8 +5420,7 @@
             // 首先加载网站配置
             await loadSiteConfig();
             
-            // 加载历史记录
-            await loadSearchHistory();
+            // 注意：历史记录由 initializePage() 统一加载，避免双重加载竞态
             
             // 绑定设置按钮
             document.getElementById('settings').addEventListener('click', function () {
@@ -5446,6 +5446,11 @@
                 openGiteeConfigModal();
             });
             document.getElementById('sync-from-gitee').addEventListener('click', syncFromGitee);
+
+            // 导出 UA 规则（供浏览器插件使用）
+            document.getElementById('export-ua-rules').addEventListener('click', function() {
+                exportUARules();
+            });
             
 
             // 导出配置按钮
@@ -5910,6 +5915,73 @@
                 }
             });
             
+            // 导出 UA 规则（供浏览器插件导入）
+            function exportUARules() {
+                // UA 预设字符串
+                const uaPresets = {
+                    desktop: {
+                        chrome_windows: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                        chrome_mac: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+                    },
+                    mobile: {
+                        iphone_safari: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+                        android_chrome: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
+                    }
+                };
+
+                const uaRules = {};
+                Object.keys(siteFlags).forEach(site => {
+                    const flags = siteFlags[site];
+                    const url = siteUrls[site] || '';
+                    let domain = '';
+                    try { domain = new URL(url).hostname; } catch(e) {}
+                    // 处理子域名
+                    if (domain) {
+                        const parts = domain.split('.');
+                        if (parts.length > 2) {
+                            domain = parts.slice(-2).join('.');
+                        }
+                    }
+
+                    if (domain) {
+                        const isDesktop = flags.desktopMode !== undefined ? flags.desktopMode : true;
+                        const uaMode = isDesktop ? 'desktop' : 'mobile';
+                        const presetKey = isDesktop ? 'chrome_windows' : 'android_chrome';
+                        // 判断是否需要 UI 重排（桌面模式下 B站和抖音需要）
+                        const needTransform = isDesktop && (
+                            domain.includes('bilibili') || domain.includes('douyin')
+                        );
+
+                        uaRules[domain] = {
+                            enabled: true,
+                            uaMode: uaMode,
+                            presetKey: presetKey,
+                            customUA: null,
+                            uiTransform: needTransform
+                        };
+                    }
+                });
+
+                const exportData = {
+                    version: '1.0.0',
+                    exportTime: new Date().toISOString(),
+                    source: 'MySearchPage',
+                    globalEnabled: true,
+                    uaRules: uaRules
+                };
+
+                const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = 'ua-rules.json';
+                a.click();
+                URL.revokeObjectURL(a.href);
+
+                // 提示
+                const ruleCount = Object.keys(uaRules).length;
+                alert(`已导出 ${ruleCount} 条 UA 规则！\n\n请在浏览器插件中点击"导入"按钮，选择导出的 ua-rules.json 文件。`);
+            }
+
             // 打开Gitee配置模态框
             function openGiteeConfigModal() {
                 const modal = document.createElement('div');

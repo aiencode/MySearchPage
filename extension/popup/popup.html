@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MySearchPage UA Controller</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <!-- 头部 -->
+    <header class="popup-header">
+      <h1 class="popup-title">UA Controller</h1>
+      <div class="global-toggle">
+        <label class="toggle-switch">
+          <input type="checkbox" id="global-toggle" checked>
+          <span class="toggle-slider"></span>
+        </label>
+        <span id="global-status" class="status-text">已启用</span>
+      </div>
+    </header>
+
+    <!-- 规则列表 -->
+    <div class="rules-list" id="rules-list">
+      <!-- 动态生成 -->
+    </div>
+
+    <!-- 底部操作栏 -->
+    <footer class="popup-footer">
+      <button id="btn-import" class="btn btn-secondary" title="导入配置">
+        <span class="btn-icon">📥</span> 导入
+      </button>
+      <button id="btn-export" class="btn btn-secondary" title="导出配置">
+        <span class="btn-icon">📤</span> 导出
+      </button>
+      <button id="btn-settings" class="btn btn-primary" title="打开设置页">
+        <span class="btn-icon">⚙️</span> 设置
+      </button>
+    </footer>
+
+    <!-- 隐藏的文件输入 -->
+    <input type="file" id="file-import" accept=".json" style="display:none">
+  </div>
+
+  <script src="../shared/constants.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

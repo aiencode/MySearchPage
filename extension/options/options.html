@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MySearchPage UA Controller - 设置</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="options-container">
+    <header class="options-header">
+      <h1>⚙️ UA Controller 设置</h1>
+      <p class="subtitle">管理各站点的 User-Agent 规则</p>
+    </header>
+
+    <!-- 全局设置 -->
+    <section class="section">
+      <h2 class="section-title">全局设置</h2>
+      <div class="setting-row">
+        <div class="setting-info">
+          <span class="setting-label">全局启用</span>
+          <span class="setting-desc">关闭后所有 UA 规则将不生效</span>
+        </div>
+        <label class="toggle-switch">
+          <input type="checkbox" id="opt-global-toggle" checked>
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </section>
+
+    <!-- UA 规则管理 -->
+    <section class="section">
+      <div class="section-header">
+        <h2 class="section-title">UA 规则</h2>
+        <div class="section-actions">
+          <button id="btn-add-rule" class="btn btn-sm btn-primary">+ 添加规则</button>
+          <button id="btn-reset-rules" class="btn btn-sm btn-danger">重置默认</button>
+        </div>
+      </div>
+
+      <div class="rules-table-container">
+        <table class="rules-table" id="rules-table">
+          <thead>
+            <tr>
+              <th>域名</th>
+              <th>UA 模式</th>
+              <th>预设</th>
+              <th>UI 重排</th>
+              <th>启用</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="rules-table-body">
+            <!-- 动态生成 -->
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 导入/导出 -->
+    <section class="section">
+      <h2 class="section-title">配置导入/导出</h2>
+      <div class="import-export-row">
+        <button id="btn-import-file" class="btn btn-secondary">
+          📥 从文件导入
+        </button>
+        <button id="btn-export-file" class="btn btn-secondary">
+          📤 导出到文件
+        </button>
+        <button id="btn-import-msp" class="btn btn-secondary">
+          🔗 从 MySearchPage 导入
+        </button>
+      </div>
+      <input type="file" id="file-import" accept=".json" style="display:none">
+    </section>
+
+    <!-- 添加/编辑规则模态框 -->
+    <div class="modal-overlay" id="rule-modal" style="display:none">
+      <div class="modal">
+        <h3 id="modal-title">添加 UA 规则</h3>
+        <div class="form-group">
+          <label for="rule-domain">域名</label>
+          <input type="text" id="rule-domain" placeholder="例: bilibili.com">
+        </div>
+        <div class="form-group">
+          <label for="rule-ua-mode">UA 模式</label>
+          <select id="rule-ua-mode">
+            <option value="desktop">🖥️ 桌面端</option>
+            <option value="mobile">📱 移动端</option>
+            <option value="custom">✏️ 自定义</option>
+          </select>
+        </div>
+        <div class="form-group" id="preset-group">
+          <label for="rule-preset">UA 预设</label>
+          <select id="rule-preset">
+            <!-- 动态填充 -->
+          </select>
+        </div>
+        <div class="form-group" id="custom-ua-group" style="display:none">
+          <label for="rule-custom-ua">自定义 UA 字符串</label>
+          <textarea id="rule-custom-ua" rows="3" placeholder="输入完整的 User-Agent 字符串"></textarea>
+        </div>
+        <div class="form-group">
+          <label class="checkbox-label">
+            <input type="checkbox" id="rule-ui-transform">
+            启用 UI 重排（桌面UA下模拟手机布局）
+          </label>
+        </div>
+        <div class="modal-actions">
+          <button id="btn-modal-cancel" class="btn btn-secondary">取消</button>
+          <button id="btn-modal-save" class="btn btn-primary">保存</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="../shared/constants.js"></script>
+  <script src="../shared/utils.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>
