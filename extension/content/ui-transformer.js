@@ -12,6 +12,7 @@ const UITransformer = {
   _rules: null,
   _applied: new WeakSet(),
   _initialized: false,
+  _mobileStyleElement: null,
 
   /**
    * 初始化重排引擎
@@ -35,7 +36,9 @@ const UITransformer = {
   /**
    * DOM 就绪后执行
    */
-  _onReady() {
+  async _onReady() {
+    await this._injectMobileStyles();
+
     // 设置 viewport
     this._setViewport();
 
@@ -52,6 +55,28 @@ const UITransformer = {
     this._watchSPARouting();
 
     console.log('[UI Transformer] 重排完成');
+  },
+
+  /**
+   * 将站点的本地移动样式作为内联 style 动态注入。
+   * 站点脚本仅在三个启用开关均开启时才会调用 init()，因此不会在关闭时留下样式。
+   */
+  async _injectMobileStyles() {
+    const stylesheet = this._rules.mobileStylesheet;
+    if (!stylesheet || this._mobileStyleElement) return;
+
+    try {
+      const stylesheetUrl = chrome.runtime.getURL(stylesheet);
+      const response = await fetch(stylesheetUrl);
+      const css = await response.text();
+      const style = document.createElement('style');
+      style.setAttribute('data-ua-controller', 'mobile-style');
+      style.textContent = css;
+      document.head.appendChild(style);
+      this._mobileStyleElement = style;
+    } catch (e) {
+      console.warn('[UI Transformer] 加载移动样式失败:', e);
+    }
   },
 
   /**
@@ -242,6 +267,10 @@ const UITransformer = {
       this._observer.disconnect();
       this._observer = null;
     }
+    if (this._mobileStyleElement && typeof this._mobileStyleElement.remove === 'function') {
+      this._mobileStyleElement.remove();
+    }
+    this._mobileStyleElement = null;
     this._initialized = false;
   },
 };

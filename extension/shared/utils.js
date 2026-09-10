@@ -10,13 +10,31 @@
  */
 function extractDomain(url) {
   try {
-    const hostname = new URL(url).hostname;
-    // 处理子域名：search.bilibili.com → bilibili.com
-    const parts = hostname.split('.');
-    if (parts.length > 2) {
-      return parts.slice(-2).join('.');
+    const hostname = new URL(url).hostname.toLowerCase().replace(/\.$/, '');
+    // IP 和本地主机本身就是可匹配主机，不能按标签截断。
+    if (
+      hostname === 'localhost' ||
+      /^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname) ||
+      hostname.includes(':')
+    ) {
+      return hostname;
     }
-    return hostname;
+
+    const parts = hostname.split('.');
+    if (parts.length <= 2) return hostname;
+
+    // 当前扩展不引入公共后缀库；覆盖导航配置及常见的二级公共后缀，
+    // 避免把 www.google.com.hk 错归为 com.hk。
+    const multiLabelPublicSuffixes = new Set([
+      'com.hk', 'com.cn', 'net.cn', 'org.cn', 'gov.cn',
+      'com.au', 'net.au', 'org.au',
+      'co.uk', 'org.uk', 'ac.uk',
+      'co.jp', 'ne.jp', 'co.kr',
+      'com.sg', 'com.tw', 'com.br', 'com.mx',
+      'co.nz', 'co.in', 'com.tr',
+    ]);
+    const lastTwo = parts.slice(-2).join('.');
+    return parts.slice(multiLabelPublicSuffixes.has(lastTwo) ? -3 : -2).join('.');
   } catch (e) {
     return null;
   }

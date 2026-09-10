@@ -15,6 +15,7 @@
 
   const BILIBILI_RULES = {
     siteName: 'Bilibili',
+    mobileStylesheet: 'content/styles/bilibili-mobile.css',
 
     // Viewport 设置
     viewport: {
@@ -142,10 +143,24 @@
     });
   }
 
-  // 初始化
-  if (typeof UITransformer !== 'undefined') {
-    UITransformer.init(BILIBILI_RULES);
-  } else {
-    console.warn('[Bilibili] UITransformer 未加载');
+  async function initializeWhenEnabled() {
+    if (typeof UITransformer === 'undefined') {
+      console.warn('[Bilibili] UITransformer 未加载');
+      return;
+    }
+
+    try {
+      const status = await chrome.runtime.sendMessage({ type: 'GET_STATUS' });
+      const rule = status && status.rules && status.rules['bilibili.com'];
+      if (!status || status.globalEnabled !== true || !rule || rule.enabled !== true || rule.uiTransform !== true) {
+        return;
+      }
+
+      UITransformer.init(BILIBILI_RULES);
+    } catch (e) {
+      console.warn('[Bilibili] 无法获取重排状态:', e);
+    }
   }
+
+  initializeWhenEnabled();
 })();

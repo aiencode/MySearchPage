@@ -3,15 +3,74 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MySearchPage UA Controller - 设置</title>
+  <title>MySearchPage 设置</title>
   <link rel="stylesheet" href="options.css">
 </head>
 <body>
   <div class="options-container">
     <header class="options-header">
-      <h1>⚙️ UA Controller 设置</h1>
-      <p class="subtitle">管理各站点的 User-Agent 规则</p>
+      <h1>MySearchPage 设置</h1>
+      <p class="subtitle">导航网站与 User-Agent 规则</p>
     </header>
+
+    <!-- 导航网站设置 -->
+    <section class="section" id="site-settings-section">
+      <div class="section-header site-settings-header">
+        <h2 class="section-title">导航网站</h2>
+        <div class="section-actions" id="settings-actions">
+          <button id="add-site-row" class="btn btn-sm btn-primary">新增行</button>
+          <button id="delete-selected-rows" class="btn btn-sm btn-danger">删除选中</button>
+          <button id="save-settings" class="btn btn-sm btn-primary">保存</button>
+          <button id="toggle-context" class="btn btn-sm btn-secondary">右键开关</button>
+          <button id="toggle-require" class="btn btn-sm btn-secondary">单开开关</button>
+          <button id="export-config" class="btn btn-sm btn-secondary">导出配置</button>
+          <button id="import-config" class="btn btn-sm btn-secondary">导入配置</button>
+          <input type="file" id="config-file-input" accept=".json,application/json" hidden>
+        </div>
+      </div>
+
+      <label class="search-field" for="settings-search">
+        <span>筛选网站</span>
+        <input type="search" id="settings-search" placeholder="名称、Data-site 或网址" autocomplete="off" spellcheck="false">
+      </label>
+
+      <div class="sites-table-container">
+        <table class="sites-table" id="sites-table">
+          <colgroup id="sites-table-colgroup">
+            <col style="width: 18%">
+            <col style="width: 12%">
+            <col style="width: 42%">
+            <col style="width: 7%">
+            <col style="width: 7%">
+            <col style="width: 8%">
+            <col style="width: 6%">
+          </colgroup>
+          <thead>
+            <tr id="sites-table-header">
+              <th class="resizable-header">按钮名称<div class="column-resizer"></div></th>
+              <th class="resizable-header">Data-site<div class="column-resizer"></div></th>
+              <th class="resizable-header">Site Urls<div class="column-resizer"></div></th>
+              <th class="resizable-header">右键<div class="column-resizer"></div></th>
+              <th class="resizable-header">单开<div class="column-resizer"></div></th>
+              <th class="resizable-header">桌面/手机<div class="column-resizer"></div></th>
+              <th class="resizable-header">操作<div class="column-resizer"></div></th>
+            </tr>
+          </thead>
+          <tbody id="sites-table-body">
+            <!-- 动态生成 -->
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section search-media-section" aria-labelledby="search-media-title">
+      <h2 class="section-title" id="search-media-title">搜索结果图片与预览</h2>
+      <div class="search-media-setting-row">
+        <span>隐藏</span>
+        <div class="search-media-sites" id="search-media-sites" role="group" aria-label="隐藏"></div>
+      </div>
+      <p class="search-media-status" id="search-media-status" role="status" aria-live="polite"></p>
+    </section>
 
     <!-- 全局设置 -->
     <section class="section">
@@ -57,21 +116,15 @@
       </div>
     </section>
 
-    <!-- 导入/导出 -->
+    <!-- UA 导入/导出 -->
     <section class="section">
-      <h2 class="section-title">配置导入/导出</h2>
+      <h2 class="section-title">UA 配置文件</h2>
       <div class="import-export-row">
-        <button id="btn-import-file" class="btn btn-secondary">
-          📥 从文件导入
-        </button>
-        <button id="btn-export-file" class="btn btn-secondary">
-          📤 导出到文件
-        </button>
-        <button id="btn-import-msp" class="btn btn-secondary">
-          🔗 从 MySearchPage 导入
-        </button>
+        <button id="btn-import-file" class="btn btn-secondary">从文件导入</button>
+        <button id="btn-export-file" class="btn btn-secondary">导出到文件</button>
+        <button id="btn-import-msp" class="btn btn-secondary">从导航配置导入</button>
       </div>
-      <input type="file" id="file-import" accept=".json" style="display:none">
+      <input type="file" id="file-import" accept=".json,application/json" hidden>
     </section>
 
     <!-- 添加/编辑规则模态框 -->
@@ -85,9 +138,9 @@
         <div class="form-group">
           <label for="rule-ua-mode">UA 模式</label>
           <select id="rule-ua-mode">
-            <option value="desktop">🖥️ 桌面端</option>
-            <option value="mobile">📱 移动端</option>
-            <option value="custom">✏️ 自定义</option>
+            <option value="desktop">桌面端</option>
+            <option value="mobile">移动端</option>
+            <option value="custom">自定义</option>
           </select>
         </div>
         <div class="form-group" id="preset-group">
@@ -116,6 +169,9 @@
 
   <script src="../shared/constants.js"></script>
   <script src="../shared/utils.js"></script>
+  <script src="../navigation/pinyin_dict_firstletter.js"></script>
   <script src="options.js"></script>
+  <script src="../shared/search-media-settings.js"></script>
+  <script src="search-media-settings.js"></script>
 </body>
 </html>

@@ -81,6 +81,40 @@ const DEFAULT_UA_RULES_BG = {
   },
 };
 
+function tabMatchesDomainBG(url, domain) {
+  const escapedDomain = domain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const domainPattern = new RegExp('^https?:\\/\\/(?:[^/?#]+\\.)?' + escapedDomain + '(?=[:/?#]|$)', 'i');
+  return typeof url === 'string' && domainPattern.test(url);
+}
+
+const LIVE_RULE_FIELDS_BG = ['enabled', 'uaMode', 'presetKey', 'customUA', 'uiTransform'];
+
+function effectiveRuleSignatureBG(rule, globalEnabled) {
+  if (!globalEnabled || !rule || !rule.enabled) return null;
+  return LIVE_RULE_FIELDS_BG.map((field) => rule[field] ?? null).join('\u0000');
+}
+
+function changedEffectiveDomainsBG(previousRules, previousGlobalEnabled, nextRules, nextGlobalEnabled) {
+  const domains = new Set([
+    ...Object.keys(previousRules || {}),
+    ...Object.keys(nextRules || {}),
+  ]);
+  return Array.from(domains).filter((domain) => (
+    effectiveRuleSignatureBG(previousRules?.[domain], previousGlobalEnabled) !==
+    effectiveRuleSignatureBG(nextRules?.[domain], nextGlobalEnabled)
+  ));
+}
+
+async function reloadOpenMatchingTabsBG(domains) {
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (tab.id == null) continue;
+    if (domains.some((domain) => tabMatchesDomainBG(tab.url, domain))) {
+      await chrome.tabs.reload(tab.id);
+    }
+  }
+}
+
 // ============================================
 // UA 解析
 // ============================================
@@ -135,7 +169,9 @@ function buildDynamicRules(uaRules, globalEnabled) {
         ],
       },
       condition: {
-        urlFilter: `*://*.${domain}/*`,
+        // DNR domain anchor covers both the bare domain and all subdomains,
+        // without leaking onto lookalikes such as notexample.com.
+        urlFilter: `||${domain}^`,
         resourceTypes: [
           'main_frame',
           'sub_frame',
@@ -240,9 +276,15 @@ async function handleRequestFirefox(details) {
 // 配置读写（Background 专用）
 // ============================================
 
+function cloneUARulesBG(rules) {
+  return Object.fromEntries(
+    Object.entries(rules || {}).map(([domain, rule]) => [domain, { ...(rule || {}) }])
+  );
+}
+
 async function getUARulesBG() {
   const data = await chrome.storage.local.get(STORAGE_KEYS_BG.UA_RULES);
-  return data[STORAGE_KEYS_BG.UA_RULES] || DEFAULT_UA_RULES_BG;
+  return cloneUARulesBG(data[STORAGE_KEYS_BG.UA_RULES] || DEFAULT_UA_RULES_BG);
 }
 
 async function getGlobalEnabledBG() {
@@ -270,12 +312,18 @@ async function handleMessage(message, sender, sendResponse) {
       }
 
       case 'TOGGLE_GLOBAL': {
+        const previousState = await getGlobalEnabledBG();
         const newState = message.enabled;
         await chrome.storage.local.set({
           [STORAGE_KEYS_BG.GLOBAL_ENABLED]: newState,
         });
         const rules = await getUARulesBG();
         await applyDynamicRules(rules, newState);
+        if (previousState !== newState) {
+          await reloadOpenMatchingTabsBG(changedEffectiveDomainsBG(
+            rules, previousState, rules, newState
+          ));
+        }
         sendResponse({ success: true });
         break;
       }
@@ -283,12 +331,20 @@ async function handleMessage(message, sender, sendResponse) {
       case 'UPDATE_RULE': {
         const { domain, rule } = message;
         const rules = await getUARulesBG();
-        rules[domain] = { ...(rules[domain] || {}), ...rule };
+        const previousRule = rules[domain] || {};
+        rules[domain] = { ...previousRule, ...rule };
         await chrome.storage.local.set({
           [STORAGE_KEYS_BG.UA_RULES]: rules,
         });
         const globalEnabled = await getGlobalEnabledBG();
         await applyDynamicRules(rules, globalEnabled);
+        const liveBehaviorChanged = globalEnabled && LIVE_RULE_FIELDS_BG.some((field) => (
+          Object.prototype.hasOwnProperty.call(rule, field) &&
+          rule[field] !== previousRule[field]
+        ));
+        if (liveBehaviorChanged) {
+          await reloadOpenMatchingTabsBG([domain]);
+        }
         sendResponse({ success: true });
         break;
       }
@@ -296,12 +352,18 @@ async function handleMessage(message, sender, sendResponse) {
       case 'DELETE_RULE': {
         const { domain } = message;
         const rules = await getUARulesBG();
+        const previousRules = { ...rules };
         delete rules[domain];
         await chrome.storage.local.set({
           [STORAGE_KEYS_BG.UA_RULES]: rules,
         });
         const globalEnabled = await getGlobalEnabledBG();
         await applyDynamicRules(rules, globalEnabled);
+        if (globalEnabled) {
+          await reloadOpenMatchingTabsBG(changedEffectiveDomainsBG(
+            previousRules, globalEnabled, rules, globalEnabled
+          ));
+        }
         sendResponse({ success: true });
         break;
       }
@@ -315,6 +377,11 @@ async function handleMessage(message, sender, sendResponse) {
         });
         const globalEnabled = await getGlobalEnabledBG();
         await applyDynamicRules(merged, globalEnabled);
+        if (globalEnabled) {
+          await reloadOpenMatchingTabsBG(changedEffectiveDomainsBG(
+            currentRules, globalEnabled, merged, globalEnabled
+          ));
+        }
         sendResponse({ success: true, rules: merged });
         break;
       }
@@ -332,11 +399,20 @@ async function handleMessage(message, sender, sendResponse) {
       }
 
       case 'RESET_RULES': {
+        const previousRules = await getUARulesBG();
+        const previousGlobalEnabled = await getGlobalEnabledBG();
+        const defaultRules = cloneUARulesBG(DEFAULT_UA_RULES_BG);
         await chrome.storage.local.set({
-          [STORAGE_KEYS_BG.UA_RULES]: { ...DEFAULT_UA_RULES_BG },
+          [STORAGE_KEYS_BG.UA_RULES]: defaultRules,
           [STORAGE_KEYS_BG.GLOBAL_ENABLED]: true,
         });
-        await applyDynamicRules(DEFAULT_UA_RULES_BG, true);
+        await applyDynamicRules(defaultRules, true);
+        await reloadOpenMatchingTabsBG(changedEffectiveDomainsBG(
+          previousRules,
+          previousGlobalEnabled,
+          defaultRules,
+          true
+        ));
         sendResponse({ success: true });
         break;
       }

@@ -14,6 +14,7 @@
 
   const DOUYIN_RULES = {
     siteName: 'Douyin',
+    mobileStylesheet: 'content/styles/douyin-mobile.css',
 
     // Viewport 设置
     viewport: {
@@ -134,10 +135,24 @@
     });
   }
 
-  // 初始化
-  if (typeof UITransformer !== 'undefined') {
-    UITransformer.init(DOUYIN_RULES);
-  } else {
-    console.warn('[Douyin] UITransformer 未加载');
+  async function initializeWhenEnabled() {
+    if (typeof UITransformer === 'undefined') {
+      console.warn('[Douyin] UITransformer 未加载');
+      return;
+    }
+
+    try {
+      const status = await chrome.runtime.sendMessage({ type: 'GET_STATUS' });
+      const rule = status && status.rules && status.rules['douyin.com'];
+      if (!status || status.globalEnabled !== true || !rule || rule.enabled !== true || rule.uiTransform !== true) {
+        return;
+      }
+
+      UITransformer.init(DOUYIN_RULES);
+    } catch (e) {
+      console.warn('[Douyin] 无法获取重排状态:', e);
+    }
   }
+
+  initializeWhenEnabled();
 })();

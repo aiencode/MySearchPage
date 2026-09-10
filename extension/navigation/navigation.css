@@ -1,0 +1,1117 @@
+
+        .flex1 {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 2px;
+        }
+
+        .flex2 {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 3px;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* 固定顶部区域 */
+        .fixed-header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: white;
+            gap: 6px; /* 统一视觉间距 */
+            z-index: 100;
+            padding: 6px 8px; /* 关键：为整个头部设置左右内边距 */
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            touch-action: none;
+            -webkit-overflow-scrolling: touch;
+            box-sizing: border-box; /* 确保padding包含在内 */
+        }
+
+        .search-container {
+            width: 100%; /* 宽度占满父容器 */
+            position: relative;
+            /* 取消外边距，统一由父容器gap控制垂直间距 */
+        }
+
+        #search-input {
+            width: 100%; /* 与容器左右边线对齐 */
+            padding: 10px 40px 10px 6px; /* 右侧为清空图标留出空间 */
+            font-size: 16px;
+            border: 1px solid #000;
+            box-sizing: border-box;
+        }
+
+        .clear-input {
+            position: absolute;
+            right: -2px;
+            top: 0;
+            bottom: 0;
+            height: 100%;
+            width: 36px; /* 与#search-input右侧padding配合(40px=4+36) */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 60px;
+            color: #999;
+            padding: 0 6px;
+            margin: 0;
+            line-height: 1;
+            transform: none;
+        }
+
+        .button-wrapper {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            width: 100%;
+        }
+
+        .control-buttons, .btn-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px; /* 统一视觉间距 */
+        }
+
+        button {
+            padding: 2px 6px; /* 统一左右padding为6px */
+            border: 1px solid #000;
+            background: transparent;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: center;
+            white-space: normal;
+            word-wrap: break-word;
+            box-shadow: 0 0 0 0px transparent; /* 预留阴影空间 */
+        }
+
+        button.small {
+            padding: 1px 2px;
+            line-height: 1.2;
+        }
+
+        button.highlight {
+            background: transparent !important;
+            border: 2px solid #2563eb !important;
+            box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.4) !important;
+        }
+
+        button.selected {
+            background-color: #e0e0e0 !important;
+        }
+
+        /* 所有按钮统一16px字体 */
+        button {
+            font-size: 16px !important;
+        }
+
+        .btn-group {
+            flex-grow: 1; /* 让网站按钮组填充剩余空间 */
+        }
+
+        /* 可滚动内容区域 */
+        .scrollable-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0 8px; /* 关键：与头部设置相同的左右内边距以对齐 */
+            margin-top: 60px; /* 需要动态计算 */
+            height: calc(100vh - 160px); /* 需要动态计算 */
+            box-sizing: border-box;
+            /* 隐藏滚动条但保持滚动功能 */
+            scrollbar-width: none; /* Firefox */
+            -ms-overflow-style: none; /* IE and Edge */
+        }
+
+        /* 隐藏 Webkit 滚动条 */
+        .scrollable-content::-webkit-scrollbar {
+            display: none;
+        }
+
+        /* 确保历史列表与头部对齐 */
+        #history-list {
+            margin: 0;
+            margin-top: 4px; /* 与fixed-header之间留出一点间隙 */
+            padding: 0; /* history-list本身不需要padding */
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        /* 调试颜色已移除 - 对齐问题已解决 */
+
+        /* .history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 5px;
+        } */
+
+        .history-header {
+            width: 100%;
+            padding-bottom: 6px; /* 统一视觉间距 */
+            gap: 6px; /* 统一视觉间距 */
+            margin: 0; /* 确保没有额外margin */
+            padding-left: 0; /* 确保没有额外左padding */
+            padding-right: 0; /* 确保没有额外右padding */
+            margin-top: 2px; /* 减少与上方的间距 */
+        }
+
+        .history-title {
+            font-weight: bold;
+            font-size: 14px;
+            /* margin-bottom: 5px; */
+            /* position: sticky; */
+            top: -15px;
+            /* margin-bottom: 0; */
+            /* padding: 2px 0; */
+            background: white;
+            z-index: 10;
+        }
+
+        .history-item {
+            display: inline-block !important;
+            margin-right: 6px !important; /* 统一视觉间距 */
+            margin-bottom: 6px !important; /* 统一视觉间距 */
+            padding: 2px 6px !important;
+            /* 保持正常边框 */
+            border: 1px solid #ddd !important;
+            cursor: pointer !important;
+            font-size: 12px !important;
+            background-color: #f9f9f9 !important;
+            box-sizing: border-box !important;
+            line-height: 1.2 !important;
+            transition: all 0.2s !important;
+        }
+
+        .history-item.hidden {
+            display: none !important;
+        }
+
+        .history-item.highlight {
+            border: 2px solid #2563eb !important;
+            box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.4) !important;
+        }
+
+        .history-item.editable {
+            border: 2px dashed #000 !important;
+            background-color: #fff9f9 !important;
+        }
+
+        .history-item.selected {
+            background-color: #e0e0e0 !important;
+        }
+
+        /* Quick search 光标所在处样式 - 绿色背景 */
+        .cursor-highlight {
+            background-color: rgba(16, 185, 129, 0.3) !important; /* 绿色背景 */
+            border: 2px solid #10B981 !important;
+            box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.5) !important;
+        }
+
+        /* 更具体的选择器确保覆盖 */
+        button.cursor-highlight,
+        .history-item.cursor-highlight {
+            background-color: rgba(16, 185, 129, 0.3) !important; /* 绿色背景 */
+            border: 2px solid #10B981 !important;
+            box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.5) !important;
+        }
+
+        /* 光标所在且选中的组合样式 - 黄色背景 */
+        .cursor-highlight.selected,
+        button.cursor-highlight.selected,
+        .history-item.cursor-highlight.selected {
+            background-color: #FFE066 !important; /* 黄色背景 */
+            border: 2px solid #10B981 !important;
+            box-shadow: 0 0 0 1px rgba(16, 185, 129, 0.5) !important;
+        }
+
+        /* 光标焦点绿色背景 */
+        button:focus,
+        .history-item:focus,
+        input:focus {
+            background-color: rgba(76, 175, 80, 0.2) !important;
+            outline: none;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-content {
+            background-color: white;
+            padding: 20px 20px; /* 左右对称基础内边距 */
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
+            color: #333; /* 确保文字颜色为深色 */
+        }
+
+        /* 全平台隐藏设置模态框内容滚动条，但保留滚动功能 */
+        #settings-modal .modal-content {
+            /* 确保纵向滚动存在 */
+            overflow-y: auto;
+            overflow-x: hidden;
+            /* 隐藏滚动条 */
+            scrollbar-width: none;       /* Firefox */
+            -ms-overflow-style: none;    /* IE 10+ / 旧 Edge */
+        }
+        #settings-modal .modal-content::-webkit-scrollbar { /* Chrome/Safari/新 Edge */
+            width: 0;
+            height: 0;
+        }
+
+        /* 打开模态框时禁用页面滚动，但不影响模态框内部滚动 */
+        body.modal-open {
+            overflow: hidden;
+            width: 100%;
+        }
+        
+        .modal-content p {
+            color: #333; /* 确保段落文字颜色为深色 */
+            margin: 0;
+            text-align: center;
+            font-size: 16px;
+        }
+
+        .edit-history-modal {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
+            z-index: 1000;
+            max-width: 90%;
+            width: 300px;
+        }
+
+        .edit-history-modal input {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 10px;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+
+        .edit-history-modal button {
+            padding: 6px 12px;
+            margin-right: 5px;
+        }
+
+        /* .quick-search-input-wrapper {
+            display: flex;
+            /* 使按钮水平排列 */
+        /* right: 120px; */
+        /* 调整到历史标题右侧 */
+        /* top: 10px;
+            align-items: center;
+            gap: 5px;
+            margin-left: 20px;
+            margin-bottom: 5px;
+            width: auto; */
+        /* 改为自动宽度 */
+        /* float: left; */
+        */
+        /* 左浮动 */
+        /*}*/
+
+        #quick-search-input {
+            width: 100px;
+            border: 1px solid #000;
+            padding: 2px 4px;
+            font-size: 14px;
+            box-shadow: 0 0 0 0px transparent; /* 预留阴影空间 */
+            height: 16px;
+            /* caret-color: transparent; */
+            /* 隐藏光标 */
+        }
+
+        @media (min-width:769px) {
+            .mobile-only {
+                display: none !important;
+            }
+        }
+
+        @media (max-width:768px) {
+            .desktop-only {
+                display: none !important;
+            }
+            /* 小屏限制设置模态框宽度，避免占满屏幕 */
+            #settings-modal .modal-content {
+                width: 90vw !important;
+                max-width: 600px !important;
+                max-height: 82vh !important;
+                box-sizing: border-box;
+                overflow-x: hidden; /* 禁止模态框内容横向滚动 */
+                overflow-y: auto;  /* 保留滚动 */
+                scrollbar-gutter: stable both-edges; /* 保持左右对称的滚动槽 */
+                /* 隐藏滚动条（跨浏览器） */
+                scrollbar-width: none;       /* Firefox */
+                -ms-overflow-style: none;    /* IE 10+ / 旧 Edge */
+                padding: 4px 8px; /* 上下4px，左右8px，左右对称 */
+            }
+            #settings-modal .modal-content::-webkit-scrollbar { /* Chrome/Safari */
+                width: 0;
+                height: 0;
+            }
+
+            /* 减小标题区域的空白 */
+            #settings-modal .modal-content h2 {
+                margin: 2px 0;
+                font-size: 16px;
+            }
+
+            /* 小屏模式下设置模态框内的表格与按钮样式 */
+            #settings-modal #sites-table {
+                table-layout: fixed; /* 固定表格布局 */
+                width: 100%;
+            }
+
+            #settings-modal #sites-table th,
+            #settings-modal #sites-table td {
+                padding: 2px 6px;
+                line-height: 1.2;
+                vertical-align: middle;
+            }
+            #sites-table th:first-child, #sites-table td:first-child { /* 左边留白略减小 */
+                padding-left: 4px;
+            }
+            #sites-table th:last-child, #sites-table td:last-child { /* 右侧腾出空间，避免贴边 */
+                padding-right: 10px;
+            }
+            #sites-table input {
+                padding: 2px 4px;
+                font-size: 14px;
+                box-sizing: border-box;
+                width: 100%;
+            }
+            #sites-table .delete-btn {
+                white-space: nowrap;
+                padding: 0 6px;
+                line-height: 1.2;
+                margin-right: 4px;
+            }
+
+            /* 分配列宽，确保删除按钮不被压缩 */
+            #settings-modal #sites-table th:nth-child(1),
+            #settings-modal #sites-table td:nth-child(1) { width: 30%; }
+            #settings-modal #sites-table th:nth-child(2),
+            #settings-modal #sites-table td:nth-child(2) { width: 50%; }
+            #settings-modal #sites-table th:nth-child(3),
+            #settings-modal #sites-table td:nth-child(3) { width: 20%; text-align: right; }
+
+
+            #settings-modal #sites-table input {
+                font-size: 12px; /* 减小输入框字体 */
+                padding: 1px 2px;
+                height: 18px; /* 减小高度 */
+                box-sizing: border-box; /* 确保padding不影响总高度 */
+                width: 100%;
+            }
+            
+            /* 允许URL输入框横向滚动 */
+            #settings-modal #sites-table td:nth-child(2) input {
+                overflow-x: hidden;
+                white-space: nowrap;
+            }
+
+            #settings-modal #sites-table button,
+            #settings-modal .button-wrapper button {
+                font-size: 12px; /* 减小按钮字体 */
+                padding: 0 2px;
+                line-height: 1.2;
+                height: 18px; /* 减小高度 */
+                min-width: auto;
+            }
+
+            #settings-modal .button-wrapper {
+                justify-content: flex-start;
+                flex-wrap: wrap; /* 允许换行 */
+                max-height: 40px; /* 限制最大高度，隐喻不超过两行 */
+                overflow: hidden;
+            }
+
+            /* 小屏模式下所有模态框按钮样式统一 */
+            #settings-modal button {
+                font-size: 12px !important;
+                padding: 0 2px !important;
+                height: 18px !important;
+                line-height: 1.2 !important;
+                margin: 0 !important;
+                box-sizing: border-box !important;
+            }
+
+            /* 小屏模式下所有模态框输入框样式统一 */
+            #settings-modal input {
+                font-size: 12px !important;
+                padding: 1px 2px !important;
+                height: 18px !important;
+                box-sizing: border-box !important;
+            }
+
+            /* 小屏模式下表格和单元格样式 */
+            #settings-modal table {
+                font-size: 12px !important;
+            }
+
+            #settings-modal th, 
+            #settings-modal td {
+                padding: 1px !important;
+                font-size: 12px !important;
+                vertical-align: middle !important;
+            }
+
+            /* 确保URL列的输入框可以横向滚动 */
+            #settings-modal td:nth-child(3) input {
+                overflow-x: hidden !important;
+                white-space: nowrap !important;
+            }
+
+            /* 拖拽样式 */
+            .draggable-row {
+                cursor: move;
+                transition: all 0.2s ease;
+            }
+            
+            .draggable-row:hover {
+                background-color: #f0f8ff;
+                transform: translateX(2px);
+            }
+            
+            .dragging {
+                opacity: 0.6;
+                background-color: #e3f2fd;
+                transform: rotate(2deg) scale(1.02);
+                z-index: 1000;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            }
+            
+            .drag-over {
+                border-top: 3px solid #2196f3;
+                background-color: #f8f9fa;
+            }
+            
+            .drag-handle {
+                cursor: move;
+                padding: 4px;
+                color: #666;
+                font-size: 12px;
+                user-select: none;
+                transition: color 0.2s ease;
+                display: inline-block;
+                width: 16px;
+            }
+            
+            .drag-handle:hover {
+                color: #2196f3;
+                transform: scale(1.2);
+            }
+            
+            /* 主界面按钮拖拽样式 */
+            .btn-group .draggable-button {
+                cursor: move;
+                transition: all 0.2s ease;
+            }
+            
+            .btn-group .draggable-button:hover {
+                box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+                transform: translateY(-1px);
+            }
+            
+            .btn-group .draggable-button.dragging {
+                opacity: 0.7;
+                transform: rotate(3deg) scale(1.05);
+                z-index: 1000;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            }
+            
+            .btn-group .drag-over-button {
+                border-left: 4px solid #2196f3;
+                background-color: rgba(33, 150, 243, 0.1);
+                transform: translateX(2px);
+            }
+            
+
+            .fixed-header {
+                gap: 1px; /* 更紧凑的统一间距 */
+                padding: 1px 2px; /* 更小的左右边距，保持对齐 */
+            }
+
+            .search-container {
+                margin-bottom: 2px;
+            }
+
+            #search-input {
+                width: 100%;
+                font-size: 12px; /* 更小字号 */
+                padding: 2px 26px 2px 2px; /* 极简padding，并为×预留右侧空间 */
+            }
+
+            .button-wrapper {
+                gap: 1px;
+            }
+
+            .control-buttons, .btn-group { gap: 1px; }
+            /* 小屏尽量保持控制按钮两行内：改为左对齐 */
+            .control-buttons { 
+                justify-content: flex-start; 
+                gap: 2px;
+            }
+            .control-buttons button {
+                flex: 0 1 auto; /* 取消强制等宽，允许按钮根据内容自适应 */
+                font-size: 14px; /* 恢复字体大小 */
+                padding: 1px 2px; /* 减少 padding 以容纳更多按钮 */
+                white-space: normal;
+                overflow: visible;
+                text-overflow: clip;
+            }
+
+            .history-header {
+                margin-top: 1px;
+            }
+
+            .scrollable-content {
+                padding: 0 2px; /* 更紧凑且与头部对齐 */
+            }
+
+            .history-item {
+                margin-right: 1px !important; /* 更紧凑统一间距 */
+                margin-bottom: 1px !important; /* 更紧凑统一间距 */
+            }
+
+            .fixed-header {
+                gap: 1px; /* 更紧凑的统一间距 */
+                padding: 1px 2px; /* 更小的左右边距，保持对齐 */
+            }
+
+            .history-header {
+                padding-bottom: 1px; /* 更紧凑统一间距 */
+                gap: 1px; /* 更紧凑统一间距 */
+            }
+
+            .search-container {
+                width: 100%; /* 宽度占满父容器 */
+                 /* 移除复杂的margin和width计算 */
+            }
+
+            /* 移除history-list在小屏的额外padding，确保与头部左右边线对齐 */
+
+            button.small {
+                font-size: 12px;
+                padding: 0 2px;
+            }
+
+            button.highlight {
+                background: transparent !important;
+                border: 2px solid #2563eb !important;
+                box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.4) !important;
+            }
+
+            /* 小屏减小按钮整体字号与横向padding */
+            button {
+                font-size: 12px;
+                padding: 0 2px;
+                line-height: 1.2;
+            }
+
+            /* 小屏清空图标垂直居中并与input等高 */
+            .clear-input {
+                right: -4px;
+                top: 4px;
+                bottom: 0;
+                height: 100%;
+                transform: none;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 40px;
+                padding: 0 4px;
+                margin: 0;
+                line-height: 1;
+                width: 24px;
+            }
+
+            /* 小屏历史项更紧凑 */
+            .history-item {
+                font-size: 12px !important;
+                padding: 1px 2px !important;
+            }
+
+            /* 小屏快速搜索输入更紧凑 */
+            #quick-search-input {
+                font-size: 12px;
+                padding: 1px 2px;
+                height: 16px;
+            }
+
+            /* 小屏ESC按钮更紧凑 */
+            #mobile-esc-btn {
+                font-size: 12px;
+                padding: 0 2px;
+                line-height: 1.2;
+            }
+
+            /* 小屏三状态复选框更紧凑 */
+            .three-state-checkbox {
+                width: 20px !important;
+                height: 20px !important;
+                font-size: 16px !important;
+                line-height: 20px !important;
+            }
+            
+            /* 小屏二状态复选框更紧凑 */
+            .two-state-checkbox {
+                width: 20px !important;
+                height: 20px !important;
+                font-size: 16px !important;
+                line-height: 20px !important;
+            }
+            
+            /* 768px以下表格优化 - 减少间距腾出空间 */
+            #sites-table th, #sites-table td {
+                padding: 1px !important;
+                font-size: 10px !important;
+                line-height: 1.0 !important;
+                height: 18px !important;
+            }
+            
+            #sites-table tr {
+                height: 18px !important;
+                margin: 0 !important;
+            }
+            
+            #sites-table input {
+                font-size: 10px !important;
+                padding: 1px !important;
+                height: 16px !important;
+                margin: 0px !important;
+                border: 1px solid #ccc !important;
+            }
+            
+            #sites-table .delete-btn {
+                font-size: 8px !important;
+                padding: 1px !important;
+                height: 14px !important;
+                margin: 0 !important;
+                display: inline-block !important;
+                vertical-align: middle !important;
+                white-space: nowrap !important;
+            }
+            
+            /* 768px以下操作列强制内联 */
+            #sites-table td:last-child {
+                white-space: nowrap !important;
+                text-align: center !important;
+                padding: 1px !important;
+                min-width: 30px !important;
+            }
+            
+            #sites-table td:last-child * {
+                display: inline-block !important;
+                vertical-align: middle !important;
+                margin: 0 !important;
+                line-height: 1 !important;
+            }
+            
+            .drag-handle {
+                font-size: 8px !important;
+                padding: 1px !important;
+                margin: 0 !important;
+                width: auto !important;
+                height: auto !important;
+            }
+            
+            /* 768px以下表格边距优化 */
+            #sites-table {
+                border-collapse: collapse !important;
+                border-spacing: 0px !important;
+            }
+            
+            /* 768px以下操作按钮区域优化 - 允许换行 */
+            #settings-actions {
+                flex-wrap: wrap !important;
+                gap: 1px !important;
+                margin-bottom: 1px !important;
+            }
+            
+            #settings-actions button {
+                font-size: 8px !important;
+                padding: 1px !important;
+                white-space: nowrap !important;
+                flex-shrink: 0 !important;
+                min-width: auto !important;
+                height: 20px !important;
+                line-height: 1.2 !important;
+                border: 1px solid #ccc !important;
+                margin: 0 !important;
+            }
+            
+            /* 768px以下设置搜索框强制优化 */
+            #settings-search {
+                font-size: 12px !important;
+                height: 18px !important;
+                padding: 1px !important;
+            }
+            
+            /* 768px以下设置标题强制优化 */
+            #settings-modal .modal-content h3 {
+                font-size: 12px !important;
+                margin: 0px 0 !important;
+            }
+            
+            /* 768px以下模态框内容进一步优化 */
+            .modal-content h3 {
+                font-size: 14px !important;
+                margin: 1px 0 !important;
+            }
+            
+            #settings-search {
+                height: 20px !important;
+                font-size: 14px !important;
+                padding: 1px 2px !important;
+            }
+        }
+
+        #mobile-search-input {
+            position: fixed;
+            bottom: 3px;
+            right: 2px;
+            width: 1px;
+            height: 1px;
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .history-title {
+            font-weight: bold;
+            font-size: 14px;
+            margin-bottom: 5px;
+            position: sticky;
+            top: -15px;
+            margin-bottom: 0;
+            padding: 2px 0;
+            background: white;
+            z-index: 10;
+        }
+
+        button {
+            padding: 1px 6px; /* 统一左右padding为6px */
+            margin: 0px; /* 移除默认margin，由gap统一控制间距 */
+            /* 保持正常边框，不要透明 */
+            border: 1px solid #000;
+            background: transparent;
+            cursor: pointer;
+            font-size: 18px;
+            transition: all 0.2s;
+            text-align: center;
+            white-space: normal;
+            word-wrap: break-word;
+            box-sizing: border-box;
+            line-height: 1.2;
+        }
+
+        /* 设置模态框表格紧凑样式与删除按钮一行显示 */
+        #sites-table th, #sites-table td {
+            padding: 1px;
+            line-height: 1.1;
+            vertical-align: middle;
+            height: 24px;
+            border-spacing: 0;
+        }
+        
+        #sites-table tr {
+            height: 24px;
+            margin: 0;
+            border-spacing: 0;
+        }
+        
+        #sites-table tbody tr {
+            border-bottom: 1px solid #eee;
+        }
+        #sites-table th:first-child, #sites-table td:first-child { /* 左边留白略减小 */
+            padding-left: 1px;
+        }
+        #sites-table th:last-child, #sites-table td:last-child { /* 右侧腾出空间，避免贴边 */
+            padding-right: 1px;
+        }
+        #sites-table input {
+            padding: 1px;
+            font-size: 12px;
+            box-sizing: border-box;
+            width: 100%;
+            height: 20px;
+            margin: 0;
+            border: 1px solid #ccc;
+        }
+        #sites-table .delete-btn {
+            white-space: nowrap;
+            padding: 1px;
+            line-height: 1.1;
+            margin: 0;
+            font-size: 10px;
+            height: 18px;
+            display: inline-block;
+            vertical-align: middle;
+        }
+        
+        /* 操作列按钮容器 - 确保按钮在同一行 */
+        #sites-table td:last-child {
+            white-space: nowrap !important;
+            text-align: center;
+            padding: 1px !important;
+            min-width: 40px;
+        }
+        
+        /* 操作列内所有元素强制内联显示 */
+        #sites-table td:last-child * {
+            display: inline-block !important;
+            vertical-align: middle !important;
+            margin: 0 !important;
+            line-height: 1 !important;
+        }
+        
+        /* 拖动手柄样式优化 */
+        .drag-handle {
+            cursor: move;
+            padding: 1px !important;
+            display: inline-block !important;
+            vertical-align: middle !important;
+            margin: 0 !important;
+            font-size: 10px !important;
+            width: auto !important;
+            height: auto !important;
+            line-height: 1 !important;
+        }
+
+        /* 三状态复选框 - 紧凑尺寸 */
+        .three-state-checkbox {
+            display: inline-block;
+            width: 18px;
+            height: 18px;
+            border: none; /* Unicode符号自带框 */
+            cursor: pointer;
+            text-align: center;
+            line-height: 18px;
+            font-size: 14px;
+            user-select: none;
+            vertical-align: middle; /* 与checkbox对齐 */
+            background: transparent;
+            margin: 0;
+            padding: 0;
+        }
+
+        .three-state-checkbox:hover {
+            opacity: 0.7;
+        }
+        
+        /* 二状态复选框 - 紧凑尺寸 */
+        .two-state-checkbox {
+            display: inline-block;
+            width: 18px;
+            height: 18px;
+            border: none; /* Unicode符号自带框 */
+            cursor: pointer;
+            text-align: center;
+            line-height: 18px;
+            font-size: 14px;
+            user-select: none;
+            vertical-align: middle;
+            background: transparent;
+            margin: 0;
+            padding: 0;
+        }
+
+        .two-state-checkbox:hover {
+            opacity: 0.7;
+        }
+
+        /* 超小屏幕适配 - 针对480px以下的设备 */
+        @media (max-width: 480px) {
+            .three-state-checkbox {
+                width: 18px !important;
+                height: 18px !important;
+                font-size: 14px !important;
+                line-height: 18px !important;
+            }
+            
+            .two-state-checkbox {
+                width: 18px !important;
+                height: 18px !important;
+                font-size: 14px !important;
+                line-height: 18px !important;
+            }
+            
+            /* 超小屏幕表格进一步紧凑 - 极致压缩间隙 */
+            #sites-table th, #sites-table td {
+                padding: 1px !important;
+                font-size: 8px !important;
+                line-height: 1.0 !important;
+                height: 14px !important;
+                border-spacing: 0px !important;
+            }
+            
+            #sites-table tr {
+                height: 14px !important;
+                margin: 0 !important;
+            }
+            
+            #sites-table input {
+                font-size: 8px !important;
+                padding: 1px !important;
+                height: 12px !important;
+                margin: 0px !important;
+                border: 1px solid #ccc !important;
+            }
+            
+            #sites-table .delete-btn {
+                font-size: 6px !important;
+                padding: 1px !important;
+                height: 10px !important;
+                margin: 0 !important;
+                min-width: 16px !important;
+                display: inline-block !important;
+                vertical-align: middle !important;
+                white-space: nowrap !important;
+            }
+            
+            /* 超小屏幕操作列进一步压缩 */
+            #sites-table td:last-child {
+                white-space: nowrap !important;
+                text-align: center !important;
+                padding: 1px !important;
+                min-width: 24px !important;
+                font-size: 6px !important;
+            }
+            
+            #sites-table td:last-child * {
+                display: inline-block !important;
+                vertical-align: middle !important;
+                margin: 0 !important;
+                line-height: 1 !important;
+                font-size: 6px !important;
+            }
+            
+            .drag-handle {
+                font-size: 6px !important;
+                padding: 1px !important;
+                margin: 0 !important;
+                width: 8px !important;
+                height: 8px !important;
+                line-height: 1 !important;
+            }
+            
+            /* 超小屏幕操作按钮进一步压缩 */
+            #settings-actions button {
+                font-size: 7px !important;
+                padding: 1px !important;
+                height: 16px !important;
+                line-height: 1.2 !important;
+            }
+            
+            /* 超小屏幕搜索框优化 */
+            #settings-search {
+                height: 18px !important;
+                font-size: 12px !important;
+                padding: 1px !important;
+            }
+            
+            /* 超小屏幕标题优化 */
+            .modal-content h3 {
+                font-size: 12px !important;
+                margin: 0px !important;
+            }
+            
+            /* 超小屏幕调整列宽 */
+            #sites-table colgroup {
+                display: none; /* 移除固定列宽 */
+            }
+            
+            #sites-table {
+                table-layout: auto !important; /* 自动布局 */
+                border-collapse: collapse !important; /* 合并边框 */
+                border-spacing: 0px !important; /* 零间距 */
+                margin: 0px !important; /* 零外边距 */
+            }
+            
+            /* 隐藏部分列标题文字 */
+            #sites-table th:nth-child(4) { /* 右键列 */
+                font-size: 0 !important;
+            }
+            #sites-table th:nth-child(4)::after {
+                content: "右";
+                font-size: 9px;
+            }
+            
+            #sites-table th:nth-child(5) { /* 单开列 */  
+                font-size: 0 !important;
+            }
+            #sites-table th:nth-child(5)::after {
+                content: "单";
+                font-size: 9px;
+            }
+            
+            #sites-table th:nth-child(6) { /* 桌面/手机列 */
+                font-size: 0 !important;
+            }
+            #sites-table th:nth-child(6)::after {
+                content: "桌";
+                font-size: 9px;
+            }
+        }
+
+        /* 表格列宽调整功能样式 */
+        .resizable-header {
+            position: relative;
+            user-select: none;
+        }
+        
+        .column-resizer {
+            position: absolute;
+            top: 0;
+            right: -2px;
+            bottom: 0;
+            width: 4px;
+            cursor: col-resize;
+            background: transparent;
+            z-index: 10;
+        }
+        
+        .column-resizer:hover {
+            background: rgba(0, 123, 255, 0.3);
+        }
+        
+        .column-resizer.resizing {
+            background: rgba(0, 123, 255, 0.6);
+        }
+        
+        #sites-table th:last-child .column-resizer {
+            display: none; /* 最后一列不显示调整器 */
+        }
+        
+        .table-resizing {
+            user-select: none;
+        }
+        
+        .table-resizing * {
+            cursor: col-resize !important;
+        }
+    

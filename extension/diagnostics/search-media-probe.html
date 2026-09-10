@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>搜索媒体诊断</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 6px 8px; color: #333; background: #fff; font: 14px/1.4 Geist, "Noto Sans SC", "Microsoft YaHei", sans-serif; }
+    main { display: flex; flex-direction: column; gap: 6px; }
+    h1 { margin: 0; font-size: 16px; }
+    p { margin: 0; }
+    .actions { display: flex; flex-wrap: wrap; gap: 6px; }
+    button { padding: 1px 6px; border: 1px solid #000; background: #fff; color: #333; font: inherit; font-size: 16px; line-height: 1.2; transition: all 0.2s; }
+    button:focus-visible { outline: 2px solid #2563eb; }
+    pre { margin: 0; padding: 6px; border-top: 1px solid #ddd; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+    @media (max-width: 768px) { body { padding: 1px 2px; } main, .actions { gap: 2px; } button { padding: 0 2px; font-size: 12px; } pre { padding: 2px; } }
+    @media (max-width: 480px) { body { padding: 1px; } main, .actions { gap: 1px; } pre { padding: 1px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>搜索媒体诊断</h1>
+    <p id="probe-status" role="status" aria-live="polite">正在采样</p>
+    <div class="actions">
+      <button id="probe-run" type="button">重新采样</button>
+      <button id="probe-clear" type="button">清除诊断记录</button>
+    </div>
+    <pre id="probe-output"></pre>
+  </main>
+  <script src="../shared/search-media-settings.js"></script>
+  <script src="../content/search-media-adapters.js"></script>
+  <script src="search-media-probe.js"></script>
+</body>
+</html>

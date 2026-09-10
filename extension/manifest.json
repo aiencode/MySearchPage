@@ -1,5 +1,8 @@
 {
   "manifest_version": 3,
+  "chrome_url_overrides": {
+    "newtab": "navigation/navigation.html"
+  },
   "name": "MySearchPage UA Controller",
   "version": "1.0.0",
   "description": "按站点控制 User-Agent，支持桌面UA下手机UI布局",
@@ -25,12 +28,39 @@
     "*://*.github.com/*",
     "*://*.taobao.com/*",
     "*://*.jd.com/*",
-    "*://*.ximalaya.com/*"
+    "*://*.ximalaya.com/*",
+    "*://*.aliyun.com/*",
+    "*://*.ankiweb.net/*",
+    "*://*.coolapk.com/*",
+    "*://*.deepseek.com/*",
+    "*://*.getquicker.net/*",
+    "*://*.greasyfork.org/*",
+    "*://*.lingfengyun.com/*",
+    "*://*.moonshot.cn/*",
+    "*://*.mubu.com/*",
+    "*://*.qq.com/*",
+    "*://*.sogou.com/*",
+    "*://*.wandoujia.com/*",
+    "*://*.yandex.com/*"
   ],
   "background": {
     "service_worker": "background/ua-controller.js"
   },
   "content_scripts": [
+    {
+      "matches": [
+        "*://*.bilibili.com/*",
+        "*://*.douyin.com/*",
+        "*://*.youtube.com/*",
+        "*://*.xiaohongshu.com/*"
+      ],
+      "js": [
+        "shared/search-media-settings.js",
+        "content/search-media-adapters.js",
+        "content/search-media-controller.js"
+      ],
+      "run_at": "document_start"
+    },
     {
       "matches": ["*://*.bilibili.com/*"],
       "js": [
@@ -39,7 +69,6 @@
         "content/ui-transformer.js",
         "content/sites/bilibili.js"
       ],
-      "css": ["content/styles/bilibili-mobile.css"],
       "run_at": "document_start"
     },
     {
@@ -50,8 +79,17 @@
         "content/ui-transformer.js",
         "content/sites/douyin.js"
       ],
-      "css": ["content/styles/douyin-mobile.css"],
       "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["content/styles/bilibili-mobile.css"],
+      "matches": ["*://*.bilibili.com/*"]
+    },
+    {
+      "resources": ["content/styles/douyin-mobile.css"],
+      "matches": ["*://*.douyin.com/*"]
     }
   ],
   "action": {
@@ -67,14 +105,5 @@
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
-  },
-  "declarative_net_request": {
-    "rule_resources": [
-      {
-        "id": "ua_rules",
-        "enabled": true,
-        "path": "rules/ua-rules.json"
-      }
-    ]
   }
 }
