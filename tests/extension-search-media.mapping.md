@@ -29,7 +29,7 @@
 | TC-01a07543-5a8a-7c5a-aa3b-1333dd4bcb91 | S-07 | 纯文字和无结果提示保留且不主动加载；无结果之后出现媒体仍被处理。两个独立测试区分直接通过与缺失处理行为 | 原生空结果和推荐边界、真实网络来源归属 |
 | TC-01a07543-5a8b-796f-be91-2abcc54f9e8e | S-08 | 直接详情文档中的媒体可见并允许用户 play，不被暂停或静音 | 真实入口打开当前页/新标签、实际详情观看和音轨；本局部单独验证详情安全边界，不证明完整搜索→详情链路 |
 | TC-01a07543-5a8c-7d24-8322-79a51f49a6bc | S-09 | 详情弹窗允许播放且动态背景结果继续屏蔽；延迟详情图片保持可见；背景文字/入口保持且媒体容器高度和比例解除 | 各站原生支持的弹窗形式及真实详情/背景音轨区分。这里是代表结构的 DOM 弹窗隔离，不宣称所有站原生均有弹窗 |
-| TC-01a07543-5a8d-7139-9902-83790c4f8d9c | S-10 | 关闭详情和恢复搜索后复用及新结果继续处理；路由恢复、pageshow persisted、再次 play 与新增结果；使用初始化前、返回路由前、插入新卡片前快照，检查媒体容器高度和比例解除 | 实际 BFCache、跨域后退、节点从结果迁为详情后恢复、重复真实观看；B 站同文档路由用同源模拟地址，不冒充真实跨域导航 |
+| TC-01a07543-5a8d-7139-9902-83790c4f8d9c | S-10 | 关闭详情和恢复搜索后复用及新结果继续处理；路由恢复、pageshow persisted、再次 play 与新增结果；小红书追加遮罩先变为 aria-hidden、详情 pathname 暂留超过旧350ms、feeds-container 整体重建、随后 popstate 的连续性回归，并验证转入另一非搜索 pathname 时撤销保护 | 实际 BFCache、跨域后退、节点从结果迁为详情后恢复、重复真实观看；小红书关闭时序是线上故障的离线可复现模型，仍需真实浏览器 DOM 与逐帧绘制轨迹验证；B 站同文档路由用同源模拟地址，不冒充真实跨域导航 |
 | TC-01a07543-5a8e-77e3-aea9-9eae8e471cbf | S-11 | 同站非搜索媒体不处理；搜索内头像与结果外账户标识隔离，分别独立测试 | 真实站点结果边界及所有非搜索页面类型 |
 | TC-01a07543-5a8f-72ba-b31c-1a8eaa43e99b | S-12 | 静置与 DOM 更新无 fetch/XHR/beacon、模拟滚动、加载点击或额外 runtime 动作；用户原生加载按钮仍可点击 | 真实页面完整请求与动作来源、浏览器布局收起是否间接触发站点懒加载 |
 | TC-01a07546-cca1-7540-8346-f6107840ac94 | S-13 | UA 总开关、单站 UA、uiTransform、三者全关四种状态分别检查动态媒体、播放 stub、UA 原值不变、没有 UA 写入及 reload/加载动作 | 安装扩展后的真实 storage/background/DNR/tab 联动、浏览器导航轨迹、真实音轨 |
@@ -115,3 +115,36 @@ node tests/extension-search-media-reload.browser.cjs
 ```
 
 本批只证明真实扩展生命周期与代表 DOM 输入的组合，不补足四站线上结构或用户实际失败网址的证据缺口。已有单 B 站诊断 RED 为辅助证据，不代替本批四站 A/B 的自动断言。
+
+## S-10 小红书返回首帧真实 Chromium 回归
+
+`tests/extension-search-media-return.browser.cjs` 使用真实 Chromium、真实
+`--load-extension` 和当前 manifest 内容脚本，离线模拟小红书同文档详情返回。
+它不替换 MutationObserver、history、requestAnimationFrame 或样式 API。
+
+逐帧覆盖：
+
+- 关闭处理器执行前；
+- 遮罩删除、结果根整体重建后的同一 JavaScript 任务；
+- URL 仍为详情路径的首个动画帧；
+- 搜索 URL 同步恢复；
+- 搜索路径首个动画帧；
+- 首帧内再次同步插入新卡片；
+- 临时 FLIP 克隆存在及删除后的连续动画帧；
+- 转入另一非搜索路径后的保护解除。
+
+fixture 同时创建继承原卡片属性的脱离结果根克隆、放大 transform，并在浏览器支持时调用
+`document.startViewTransition()`。每个检查点保存 DOM/矩形/计算样式和页面截图；断言结果根保持
+flex 布局、选中及周围卡片媒体始终不可见、卡片不放大、命名 View Transition 快照不生效，
+且搜索路径至少完成一个受保护绘制帧后才解除静态保护。
+
+```powershell
+$env:MYSEARCHPAGE_PLAYWRIGHT_MODULE = '<existing-toolchain>/node_modules/playwright'
+$env:MYSEARCHPAGE_CHROMIUM_BINARY = '<existing-browser>/chrome.exe'
+$env:MYSEARCHPAGE_BROWSER_ARTIFACTS = '<task-artifacts-on-E>/xhs-return'
+$env:TEMP = $env:MYSEARCHPAGE_BROWSER_ARTIFACTS
+$env:TMP = $env:TEMP
+node tests/extension-search-media-return.browser.cjs
+```
+
+该测试仍是离线真实浏览器时序模型，不冒充用户当前线上页面的完整 DOM 取证。

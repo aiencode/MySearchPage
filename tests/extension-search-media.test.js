@@ -296,7 +296,8 @@ function visible(h, element) {
   if (!element || !element.isConnected) return false;
   for (let current = element; current?.nodeType === 1; current = current.parentElement) {
     const style = h.window.getComputedStyle(current);
-    if (current.hidden || style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse' || style.opacity === '0') return false;
+    if (current.hidden || style.display === 'none' || style.opacity === '0' ||
+      (current === element && (style.visibility === 'hidden' || style.visibility === 'collapse'))) return false;
   }
   return true;
 }
@@ -541,11 +542,21 @@ for (const site of sites) {
   scenario('S-10', '关闭详情和恢复搜索后复用及新结果继续处理', async t => {
     const h = await harness(t, site);
     const dialog = addDetail(h, { dialog: true });
+    const sameOriginDetail = site.sameOriginDetail || site.detail;
+    if (site.id === 'xiaohongshu') await h.route(sameOriginDetail);
     await dialog.querySelector('video').play();
     await h.settle();
     dialog.remove();
-    const sameOriginDetail = site.sameOriginDetail || site.detail;
-    await h.route(sameOriginDetail);
+    if (site.id === 'xiaohongshu') {
+      // 小红书先移除详情遮罩，再异步恢复搜索 URL。两者之间不能撤销
+      // 背景结果样式，否则会出现图片闪现和瀑布流全页重排。
+      await h.settle(0);
+      assertMediaHidden(h);
+      assertSlotsReleased(h);
+      assertPaused(h);
+    } else {
+      await h.route(sameOriginDetail);
+    }
     // Keep the existing result nodes while simulating a same-document detail
     // route. Real cross-origin/new-tab navigation is a browser follow-up.
     const beforeReturn = preserveSnapshot(h, h.document.querySelector('[data-test-results]'));
@@ -561,6 +572,156 @@ for (const site of sites) {
     assertSlotsReleased(h);
     assertPaused(h);
   });
+
+  if (site.id === 'xiaohongshu') {
+    scenario('S-10', '详情遮罩先隐藏、路由延迟且瀑布流重建时持续收起', async t => {
+    const h = await harness(t, site);
+      const dialog = addDetail(h, { dialog: true });
+      await h.route(site.detail);
+      await dialog.querySelector('video').play();
+      await h.settle();
+
+      const initialRoot = h.document.querySelector('[data-test-results]');
+      const assertSuppressed = (root, snapshot) => {
+        assertPreserved(h, snapshot);
+        assertMediaHidden(h, root);
+        assertSlotsReleased(h);
+        assertPaused(h, root);
+      };
+
+      // 关闭时遮罩可先进入隐藏状态，而详情 pathname 尚未恢复。
+      dialog.setAttribute('aria-hidden', 'true');
+      await h.settle(0);
+      assert.equal(h.window.location.pathname, new URL(site.detail).pathname);
+      assertSuppressed(initialRoot, h.originalSnapshot);
+
+      // 超过旧固定350ms宽限期，搜索路由仍未恢复。
+      await h.settle(500);
+      assertSuppressed(initialRoot, h.originalSnapshot);
+
+      // 站点可在恢复搜索路由之前重建整个瀑布流。
+      const rebuiltRoot = h.document.createElement('div');
+      rebuiltRoot.className = 'feeds-container';
+      rebuiltRoot.setAttribute('data-test-results', '');
+      rebuiltRoot.innerHTML = cardMarkup(site, 'detail-return-rebuilt');
+      const rebuiltSnapshot = preserveSnapshot(h, rebuiltRoot);
+      initialRoot.replaceWith(rebuiltRoot);
+      h.capture(rebuiltRoot);
+      await h.settle(0);
+      assertSuppressed(rebuiltRoot, rebuiltSnapshot);
+
+      dialog.remove();
+      await h.settle(0);
+      assertSuppressed(rebuiltRoot, rebuiltSnapshot);
+
+      await h.route(site.search, 'popstate');
+      assertPreserved(h, rebuiltSnapshot);
+      assertSuppressed(rebuiltRoot, rebuiltSnapshot);
+    });
+
+    scenario('S-10', '详情关闭后转到另一非搜索路径会解除返回保护', async t => {
+      const h = await harness(t, site);
+      const dialog = addDetail(h, { dialog: true });
+      await h.route(site.detail);
+      dialog.setAttribute('aria-hidden', 'true');
+      await h.settle(0);
+      assertMediaHidden(h);
+      assertSlotsReleased(h);
+
+      dialog.remove();
+      await h.route(site.outside);
+      assertNativeResults(h, site);
+
+      const preview = h.document.querySelector('[data-test-preview]');
+      await preview.play();
+      await h.settle();
+      assert.equal(preview.paused, false,
+        'BEHAVIOR_FAILURE: detail-return guard leaked into another non-search route');
+      assert.equal(preview.muted, false,
+        'BEHAVIOR_FAILURE: detail-return guard kept non-search preview muted');
+    });
+  }
+
+  if (site.id === 'xiaohongshu') {
+    scenario('S-10', '关闭前静态保护覆盖同步重建并跨越搜索首个动画帧', async t => {
+      const h = await harness(t, site);
+      const dialog = addDetail(h, { dialog: true });
+      await h.route(site.detail);
+      await h.settle();
+
+      const oldRoot = h.document.querySelector('[data-test-results]');
+      const rebuiltRoot = h.document.createElement('div');
+      rebuiltRoot.className = 'feeds-container';
+      rebuiltRoot.setAttribute('data-test-results', '');
+      rebuiltRoot.style.display = 'block';
+      rebuiltRoot.style.height = '1200px';
+      rebuiltRoot.innerHTML =
+        cardMarkup(site, 'return-static-1') +
+        cardMarkup(site, 'return-static-2');
+      [...rebuiltRoot.querySelectorAll('[data-test-card]')].forEach((card, index) => {
+        card.style.position = 'absolute';
+        card.style.width = '340px';
+        card.style.transform =
+          `translate(0px, ${index * 600}px) scale(${index === 0 ? 1.8 : 1})`;
+      });
+
+      dialog.setAttribute('aria-hidden', 'true');
+      dialog.remove();
+      oldRoot.replaceWith(rebuiltRoot);
+      h.capture(rebuiltRoot);
+      const rebuiltSnapshot = preserveSnapshot(h, rebuiltRoot);
+
+      // 不让出当前任务：MutationObserver和逐节点内联样式尚未执行。
+      assert.equal(h.window.location.href, site.detail);
+      assertPreserved(h, rebuiltSnapshot);
+      assertMediaHidden(h, rebuiltRoot);
+      assertSlotsReleased(h);
+      assert.equal(h.window.getComputedStyle(rebuiltRoot).display, 'flex',
+        'BEHAVIOR_FAILURE: rebuilt waterfall was paintable in native block layout');
+      assert.equal(
+        h.window.getComputedStyle(
+          rebuiltRoot.querySelector('[data-test-card]')
+        ).transform,
+        'none',
+        'BEHAVIOR_FAILURE: selected rebuilt card retained its enlarged transform'
+      );
+
+      h.window.history.replaceState({}, '', site.search);
+      h.window.dispatchEvent(new h.window.PopStateEvent('popstate'));
+      await h.settle(0);
+
+      // 首个rAF仍必须由静态保护覆盖；此时同步加入的新卡片不能露图。
+      await new Promise(resolve => h.window.requestAnimationFrame(resolve));
+      const holder = h.document.createElement('div');
+      holder.innerHTML = cardMarkup(site, 'first-search-frame');
+      const firstFrameCard = holder.firstElementChild;
+      firstFrameCard.style.position = 'absolute';
+      firstFrameCard.style.transform = 'scale(2)';
+      rebuiltRoot.appendChild(firstFrameCard);
+      h.capture(rebuiltRoot);
+
+      assertMediaHidden(h, rebuiltRoot);
+      assert.equal(h.window.getComputedStyle(firstFrameCard).transform, 'none',
+        'BEHAVIOR_FAILURE: first search frame exposed a FLIP-style enlargement');
+
+      await h.settle(0);
+      assertPaused(h, rebuiltRoot);
+      await h.settle(80);
+      assertPreserved(h, rebuiltSnapshot);
+      assertMediaHidden(h, rebuiltRoot);
+      assertSlotsReleased(h);
+      assertPaused(h, rebuiltRoot);
+
+      // 转入明确的另一非搜索路径后，静态和逐节点保护都必须释放。
+      await h.route(site.outside);
+      for (const media of rebuiltRoot.querySelectorAll('[data-test-media]')) {
+        assert.ok(visible(h, media),
+          'BEHAVIOR_FAILURE: return guard leaked into another non-search path');
+      }
+      assert.equal(h.window.getComputedStyle(rebuiltRoot).display, 'block',
+        'BEHAVIOR_FAILURE: return guard retained the waterfall root layout');
+    });
+  }
 
   scenario('S-11', '结果外标识及同站非搜索媒体不被处理', async t => {
     const h = await harness(t, site, { url: site.outside });

@@ -19,9 +19,21 @@
   let scheduled = false;
   let currentUrl = location.href;
   let storageRevision = 0;
+  let detailOverlayOpen = false;
+  let detailReturnPending = false;
+  let detailRoutePath = null;
+  const RETURN_GUARD_ATTR = 'data-mysearch-media-return-guard';
+  const RETURN_CARD_ATTR = 'data-mysearch-media-return-card';
+  const RETURN_GUARD_STYLE_ID = 'mysearch-media-return-guard-style';
+  const returnGuardSupported = adapter.domain === 'xiaohongshu.com' &&
+    Boolean(adapter.flowRoot && adapter.cardLayout && adapter.rootLayout);
+  let returnGuardReleaseFrame = null;
+  let returnGuardStableSnapshot = null;
 
   function query(root, selector) {
-    return selector ? Array.from(root.querySelectorAll(selector)) : [];
+    return selector && typeof root?.querySelectorAll === 'function'
+      ? Array.from(root.querySelectorAll(selector))
+      : [];
   }
 
   function inDetail(node) {
@@ -31,6 +43,340 @@
   function searchLocation() {
     return adapter.isSearch(new URL(location.href));
   }
+
+  function inResultFlow(card) {
+    return Boolean(card.closest(adapter.roots) || (
+      adapter.flowRoot && card.closest(adapter.flowRoot)
+    ));
+  }
+
+  function hasRetainedBackground(cards) {
+    return cards.some((card) => (
+      retainedCards.has(card) && inResultFlow(card) && !inDetail(card)
+    ));
+  }
+
+  function returnGuardActive() {
+    const root = globalThis.document?.documentElement;
+    return Boolean(
+      returnGuardSupported &&
+      root &&
+      typeof root.hasAttribute === 'function' &&
+      root.hasAttribute(RETURN_GUARD_ATTR)
+    );
+  }
+
+  function setReturnGuardAttribute() {
+    const root = globalThis.document?.documentElement;
+    if (!returnGuardSupported ||
+      !root ||
+      typeof root.setAttribute !== 'function') return false;
+    root.setAttribute(RETURN_GUARD_ATTR, '');
+    return true;
+  }
+
+  function removeReturnGuardAttribute() {
+    const root = globalThis.document?.documentElement;
+    if (!root || typeof root.removeAttribute !== 'function') return false;
+    root.removeAttribute(RETURN_GUARD_ATTR);
+    return true;
+  }
+
+  function cssDeclarations(properties) {
+    return Object.entries(properties || {})
+      .map(([property, value]) => `${property}: ${value} !important;`)
+      .join('\n');
+  }
+
+  function installReturnGuardStyle() {
+    if (!returnGuardSupported || document.getElementById(RETURN_GUARD_STYLE_ID)) return;
+
+    const root = `:is(${adapter.flowRoot})`;
+    const card = `:is(${adapter.cards})`;
+    const details = `:is(${adapter.details})`;
+  const marker = `[${RETURN_CARD_ATTR}]`;
+  const rootScope = `html[${RETURN_GUARD_ATTR}] ${root} ${card}`;
+  const detachedMarker = [
+    `html[${RETURN_GUARD_ATTR}] body > ${marker}:not(${details})`,
+    `html[${RETURN_GUARD_ATTR}] body > ${card}:not(${details})`,
+  ].join(',\n');
+  const guardedRootCard =
+    `html[${RETURN_GUARD_ATTR}] ${root} :is(${marker}, ${card})` +
+    `:not(${details}):not(${details} :is(${marker}, ${card}))`;
+  // Use simple result-root selectors here so newly rebuilt cards are collapsed
+  // before marker reconciliation, without relying on the guarded-card selector.
+  const guardedRootBox = [
+    `html[${RETURN_GUARD_ATTR}] ${root} ${card} :is(${adapter.boxes})`,
+    `html[${RETURN_GUARD_ATTR}] ${root} ${marker} :is(${adapter.boxes})`,
+    `html[${RETURN_GUARD_ATTR}] ${root} ${card} a.cover`,
+    `html[${RETURN_GUARD_ATTR}] ${root} ${marker} a.cover`,
+  ].join(',\n');
+
+    const scopeRules = (scope) => `
+${scope} {
+  ${cssDeclarations(adapter.cardLayout)}
+  height: auto !important;
+  min-height: 0 !important;
+  aspect-ratio: auto !important;
+  background-image: none !important;
+  view-transition-name: none !important;
+}
+${scope} * {
+  view-transition-name: none !important;
+}
+${scope} :is(${mediaSelector}) {
+  display: none !important;
+  view-transition-name: none !important;
+}
+${scope} :is(${adapter.boxes}) {
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  width: auto !important;
+  min-width: 0 !important;
+  aspect-ratio: auto !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  background-image: none !important;
+}
+${scope} :is(${adapter.backgrounds}, [style*="background"]) {
+  background-image: none !important;
+}
+`;
+
+    const style = document.createElement('style');
+    style.id = RETURN_GUARD_STYLE_ID;
+    style.textContent = `
+html[${RETURN_GUARD_ATTR}] {
+  view-transition-name: none !important;
+}
+html[${RETURN_GUARD_ATTR}] ${root} {
+  ${cssDeclarations(adapter.rootLayout)}
+  view-transition-name: none !important;
+}
+${scopeRules(rootScope)}
+${guardedRootCard} {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  aspect-ratio: auto !important;
+  transform: none !important;
+  translate: none !important;
+  view-transition-name: none !important;
+}
+html[${RETURN_GUARD_ATTR}] ${root} ${card} a.cover,
+html[${RETURN_GUARD_ATTR}] ${root} ${marker} a.cover {
+  display: none !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  width: auto !important;
+  min-width: 0 !important;
+  aspect-ratio: auto !important;
+  padding: 0 !important;
+  background: none !important;
+  background-image: none !important;
+  transform: none !important;
+  translate: none !important;
+  view-transition-name: none !important;
+}
+${guardedRootBox} {
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  width: auto !important;
+  min-width: 0 !important;
+  aspect-ratio: auto !important;
+  padding: 0 !important;
+  background: none !important;
+  background-image: none !important;
+  transform: none !important;
+  translate: none !important;
+  overflow: visible !important;
+  view-transition-name: none !important;
+}
+html[${RETURN_GUARD_ATTR}] ${root} ${card} img,
+html[${RETURN_GUARD_ATTR}] ${root} ${card} picture,
+html[${RETURN_GUARD_ATTR}] ${root} ${card} video,
+html[${RETURN_GUARD_ATTR}] ${root} ${card} canvas,
+html[${RETURN_GUARD_ATTR}] ${root} ${marker} img,
+html[${RETURN_GUARD_ATTR}] ${root} ${marker} picture,
+html[${RETURN_GUARD_ATTR}] ${root} ${marker} video,
+html[${RETURN_GUARD_ATTR}] ${root} ${marker} canvas {
+  display: none !important;
+  view-transition-name: none !important;
+}
+html[${RETURN_GUARD_ATTR}] ${root} ${details} img,
+html[${RETURN_GUARD_ATTR}] ${root} ${details} picture,
+html[${RETURN_GUARD_ATTR}] ${root} ${details} video,
+html[${RETURN_GUARD_ATTR}] ${root} ${details} canvas {
+  display: revert !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  view-transition-name: revert !important;
+}
+${detachedMarker} {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transform: none !important;
+  translate: none !important;
+  view-transition-name: none !important;
+}
+html[${RETURN_GUARD_ATTR}] ${root},
+html[${RETURN_GUARD_ATTR}] ${root} *:not(${details}):not(${details} *) {
+  visibility: visible !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+html[${RETURN_GUARD_ATTR}] ${root} {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: flex-start !important;
+  align-content: flex-start !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+}
+`;
+    (document.head || document.documentElement).appendChild(style);
+  }
+
+  function cancelReturnGuardRelease() {
+    if (returnGuardReleaseFrame !== null) {
+      cancelAnimationFrame(returnGuardReleaseFrame);
+      returnGuardReleaseFrame = null;
+    }
+    returnGuardStableSnapshot = null;
+  }
+
+  function markReturnGuardCards() {
+    if (!returnGuardSupported) return;
+    for (const card of query(document, adapter.cards)) {
+      if (!card.isConnected || inDetail(card) ||
+          card.closest('header, nav, aside, [role="navigation"]')) continue;
+      if (card.closest(adapter.flowRoot)) card.setAttribute(RETURN_CARD_ATTR, '');
+    }
+  }
+
+  function armReturnGuard() {
+    if (!returnGuardSupported || !enabled) return;
+    installReturnGuardStyle();
+    cancelReturnGuardRelease();
+    markReturnGuardCards();
+    if (!setReturnGuardAttribute()) return;
+  }
+
+  function clearReturnGuard() {
+    if (!returnGuardSupported) return;
+    cancelReturnGuardRelease();
+    removeReturnGuardAttribute();
+    for (const card of query(document, `[${RETURN_CARD_ATTR}]`)) {
+      card.removeAttribute(RETURN_CARD_ATTR);
+    }
+  }
+
+  function currentReturnGuardSnapshot() {
+    const roots = query(document, adapter.flowRoot)
+      .filter((root) => root.isConnected && !inDetail(root));
+    const inRoot = (node) => roots.some((root) => root.contains(node));
+    const cards = query(document, adapter.cards)
+      .filter((card) => card.isConnected && !inDetail(card) && inRoot(card));
+    const transients = query(document, `[${RETURN_CARD_ATTR}]`)
+      .filter((card) => card.isConnected && !inDetail(card) && !inRoot(card));
+    return { roots, cards, transients };
+  }
+
+  function sameNodeList(left, right) {
+    return left.length === right.length &&
+      left.every((node, index) => node === right[index]);
+  }
+
+  function sameReturnGuardSnapshot(left, right) {
+    return Boolean(left && right) &&
+      sameNodeList(left.roots, right.roots) &&
+      sameNodeList(left.cards, right.cards) &&
+      sameNodeList(left.transients, right.transients);
+  }
+
+  function hasRequestedStyles(node, properties) {
+    const saved = styles.get(node);
+    return Object.entries(properties).every(([property, value]) => (
+      saved?.get(property)?.requested === value
+    ));
+  }
+
+  function returnGuardInlineReady(snapshot) {
+    if (!snapshot.roots.length || snapshot.transients.length) return false;
+    if (!snapshot.cards.length) return true;
+    if (!snapshot.roots.every((root) => hasRequestedStyles(root, adapter.rootLayout))) {
+      return false;
+    }
+    return snapshot.cards.every((card) => (
+      hasRequestedStyles(card, adapter.cardLayout) &&
+      query(card, mediaSelector).every((media) => (
+        styles.get(media)?.get('display')?.requested === 'none'
+      ))
+    ));
+  }
+
+  function scheduleReturnGuardRelease() {
+    if (!returnGuardActive() || returnGuardReleaseFrame !== null) return;
+    returnGuardStableSnapshot = currentReturnGuardSnapshot();
+
+    returnGuardReleaseFrame = requestAnimationFrame(() => {
+      returnGuardReleaseFrame = null;
+      if (!returnGuardActive()) return;
+      if (!enabled) {
+        clearReturnGuard();
+        return;
+      }
+      if (!searchLocation() || hasOpenDetailOverlay()) return;
+
+      const firstFrame = currentReturnGuardSnapshot();
+      if (!firstFrame.roots.length || firstFrame.transients.length) {
+        returnGuardStableSnapshot = firstFrame;
+        return;
+      }
+      if (!sameReturnGuardSnapshot(returnGuardStableSnapshot, firstFrame) ||
+          !returnGuardInlineReady(firstFrame)) {
+        returnGuardStableSnapshot = firstFrame;
+        schedule();
+        return;
+      }
+
+      // 这一帧仍保持静态保护，让浏览器至少完成一次受保护绘制。
+      returnGuardStableSnapshot = firstFrame;
+      returnGuardReleaseFrame = requestAnimationFrame(() => {
+        returnGuardReleaseFrame = null;
+        if (!returnGuardActive()) return;
+        if (!enabled) {
+          clearReturnGuard();
+          return;
+        }
+        if (!searchLocation() || hasOpenDetailOverlay()) return;
+
+        const secondFrame = currentReturnGuardSnapshot();
+        if (!sameReturnGuardSnapshot(returnGuardStableSnapshot, secondFrame) ||
+            !returnGuardInlineReady(secondFrame)) {
+          returnGuardStableSnapshot = secondFrame;
+          schedule();
+          return;
+        }
+        clearReturnGuard();
+      });
+    });
+  }
+
+  installReturnGuardStyle();
 
   function hasOpenDetailOverlay() {
     const generic = '[role="dialog"], [aria-modal="true"]';
@@ -49,8 +395,10 @@
     if (searchLocation()) {
       return Boolean(card.closest(adapter.roots)) || !document.querySelector(adapter.roots);
     }
-    // Some sites change the URL while keeping search results behind a detail dialog.
-    return retainedCards.has(card) && hasOpenDetailOverlay();
+    // Same-document detail close must keep the old result flow suppressed while
+    // the site restores its search URL, including newly-created result cards.
+    return (detailOverlayOpen || detailReturnPending) &&
+      (retainedCards.has(card) || inResultFlow(card));
   }
 
   function scopeOf(node) {
@@ -70,6 +418,62 @@
 
   function hasText(node) {
     return Boolean(node.textContent.replace(/\s+/g, '').length);
+  }
+
+  function isDetachedReturnClone(node) {
+    return Boolean(
+      adapter.flowRoot &&
+      node?.nodeType === 1 &&
+      node.parentElement === document.body &&
+      (
+        node.hasAttribute?.(RETURN_CARD_ATTR) ||
+        node.matches?.(adapter.cards)
+      ) &&
+      !node.closest(adapter.flowRoot) &&
+      !inDetail(node)
+    );
+  }
+
+  function collectDetachedReturnClones(desired) {
+    const body = globalThis.document?.body;
+    if (!returnGuardActive() || !body || !body.children) return;
+
+    for (const node of Array.from(body.children)) {
+      if (!isDetachedReturnClone(node)) continue;
+      addStyle(desired, node, {
+        display: 'none',
+        visibility: 'hidden',
+        opacity: '0',
+        'pointer-events': 'none',
+        transform: 'none',
+        translate: 'none',
+        'view-transition-name': 'none',
+      });
+    }
+  }
+
+  function preserveGuardedResultText(desired) {
+    const page = globalThis.document;
+    if (!enabled ||
+      !returnGuardActive() ||
+      typeof page?.querySelectorAll !== 'function') return;
+    const rootSelector = adapter.flowRoot || adapter.roots;
+    for (const root of query(page, rootSelector)) {
+      if (inDetail(root)) continue;
+      for (const node of [root, ...query(root, '*')]) {
+        if (inDetail(node) || node.matches(mediaSelector) || !hasText(node)) continue;
+        const properties = {
+          visibility: 'visible',
+          opacity: '1',
+          'pointer-events': 'auto',
+        };
+        if (getComputedStyle(node).display === 'none' &&
+          (node.matches(adapter.cards) || node.hasAttribute(RETURN_CARD_ATTR))) {
+          properties.display = 'block';
+        }
+        addStyle(desired, node, properties);
+      }
+    }
   }
 
   function collapseBox(desired, node) {
@@ -227,30 +631,211 @@
   function reconcile() {
     scheduled = false;
     currentUrl = location.href;
+    const searching = searchLocation();
+    const detailOpen = hasOpenDetailOverlay();
+    const cards = query(document, adapter.cards);
+    const retainedBackground = hasRetainedBackground(cards);
+
+    if (detailOpen &&
+        (detailOverlayOpen || detailReturnPending || retainedBackground)) {
+      armReturnGuard();
+    }
+
+    if (searching) {
+      detailOverlayOpen = false;
+      detailReturnPending = false;
+      detailRoutePath = null;
+    } else if (detailOpen && (
+      detailOverlayOpen || detailReturnPending || retainedBackground
+    )) {
+      detailOverlayOpen = true;
+      detailReturnPending = false;
+      detailRoutePath = location.pathname;
+    } else if (!detailOpen && detailOverlayOpen) {
+      detailOverlayOpen = false;
+      detailReturnPending = location.pathname === detailRoutePath;
+      if (!detailReturnPending) detailRoutePath = null;
+    } else if (
+      !detailOpen &&
+      detailReturnPending &&
+      location.pathname !== detailRoutePath
+    ) {
+      detailReturnPending = false;
+      detailRoutePath = null;
+      clearReturnGuard();
+    }
     const desired = new Map();
     const desiredPlayers = new Set();
     if (enabled) {
-      for (const card of query(document, adapter.cards)) {
+      for (const card of cards) {
         if (!isCard(card)) continue;
         retainedCards.add(card);
+        if (returnGuardActive() && inResultFlow(card)) {
+          card.setAttribute(RETURN_CARD_ATTR, '');
+        }
         collectScope(desired, desiredPlayers, card);
       }
       for (const preview of query(document, adapter.previews)) {
         if (scopeOf(preview)) collectScope(desired, desiredPlayers, preview);
       }
     }
+    collectDetachedReturnClones(desired);
+    preserveGuardedResultText(desired);
     applyStyles(desired);
     for (const [video, state] of players) {
       if (!desiredPlayers.has(video)) restorePlayer(video, state);
     }
     for (const video of desiredPlayers) stopPreview(video);
+
+    if (returnGuardActive()) {
+      if (!enabled ||
+          (!searching && !detailOpen && !detailReturnPending)) {
+        clearReturnGuard();
+      } else if (searching && !detailOpen) {
+        scheduleReturnGuardRelease();
+      }
+    }
   }
 
   function schedule() {
+    cancelReturnGuardRelease();
     if (scheduled) return;
     scheduled = true;
     queueMicrotask(reconcile);
   }
+
+  function installSynchronousReturnRootReplacementHook() {
+    if (!adapter.flowRoot) return;
+    const prototype = globalThis.Element?.prototype;
+    const nativeReplaceWith = prototype?.replaceWith;
+    if (typeof nativeReplaceWith !== 'function' ||
+      nativeReplaceWith.__mysearchReturnRootReplacementHook) return;
+
+    function replaceWithReturnGuard(...nodes) {
+      const replacesGuardedResultRoot = Boolean(
+        returnGuardActive() &&
+        this.matches?.(adapter.flowRoot)
+      );
+      const insertsGuardedReturnNode =
+        isGuardedReturnFlow(this.parentElement, nodes);
+      const result = nativeReplaceWith.apply(this, nodes);
+
+      if (replacesGuardedResultRoot || insertsGuardedReturnNode) {
+        cancelReturnGuardRelease();
+        reconcile();
+      }
+      return result;
+    }
+
+    Object.defineProperty(
+      replaceWithReturnGuard,
+      '__mysearchReturnRootReplacementHook',
+      { value: true },
+    );
+    prototype.replaceWith = replaceWithReturnGuard;
+  }
+
+  installSynchronousReturnRootReplacementHook();
+
+  function containsReturnCardMarker(node) {
+    return Boolean(
+      node &&
+      (
+        (
+          node.nodeType === 1 &&
+          (
+            node.hasAttribute?.(RETURN_CARD_ATTR) ||
+            node.matches?.(adapter.cards)
+          )
+        ) ||
+        node.querySelector?.(`[${RETURN_CARD_ATTR}], ${adapter.cards}`)
+      )
+    );
+  }
+
+  function isGuardedReturnFlow(target, insertedNodes = []) {
+    if (!adapter.flowRoot ||
+      !returnGuardActive() ||
+      !target) return false;
+
+    if (target.matches?.(adapter.flowRoot)) return true;
+    const body = globalThis.document?.body;
+    if (typeof body?.contains !== 'function' ||
+      !body.contains(target) ||
+      target.closest?.(adapter.flowRoot)) return false;
+
+    return insertedNodes.some(containsReturnCardMarker);
+  }
+
+  function reconcileSynchronousReturnFlowInsertion(guardedTarget) {
+    if (!guardedTarget) return;
+    cancelReturnGuardRelease();
+    reconcile();
+  }
+
+  function installSynchronousReturnFlowInsertionHooks() {
+    if (!adapter.flowRoot) return;
+
+    const elementPrototype = globalThis.Element?.prototype;
+    const nodePrototype = globalThis.Node?.prototype;
+    if (!elementPrototype || !nodePrototype) return;
+
+    const nativeAppend = elementPrototype.append;
+    if (typeof nativeAppend === 'function' &&
+      !nativeAppend.__mysearchReturnFlowAppendHook) {
+      function appendReturnGuard(...nodes) {
+        const guardedTarget = isGuardedReturnFlow(this, nodes);
+        const result = nativeAppend.apply(this, nodes);
+        reconcileSynchronousReturnFlowInsertion(guardedTarget);
+        return result;
+      }
+
+      Object.defineProperty(
+        appendReturnGuard,
+        '__mysearchReturnFlowAppendHook',
+        { value: true },
+      );
+      elementPrototype.append = appendReturnGuard;
+    }
+
+    const nativeAppendChild = nodePrototype.appendChild;
+    if (typeof nativeAppendChild === 'function' &&
+      !nativeAppendChild.__mysearchReturnFlowAppendChildHook) {
+      function appendChildReturnGuard(node) {
+        const guardedTarget = isGuardedReturnFlow(this, [node]);
+        const result = nativeAppendChild.call(this, node);
+        reconcileSynchronousReturnFlowInsertion(guardedTarget);
+        return result;
+      }
+
+      Object.defineProperty(
+        appendChildReturnGuard,
+        '__mysearchReturnFlowAppendChildHook',
+        { value: true },
+      );
+      nodePrototype.appendChild = appendChildReturnGuard;
+    }
+
+    const nativeInsertBefore = nodePrototype.insertBefore;
+    if (typeof nativeInsertBefore === 'function' &&
+      !nativeInsertBefore.__mysearchReturnFlowInsertBeforeHook) {
+      function insertBeforeReturnGuard(node, referenceNode) {
+        const guardedTarget = isGuardedReturnFlow(this, [node]);
+        const result = nativeInsertBefore.call(this, node, referenceNode);
+        reconcileSynchronousReturnFlowInsertion(guardedTarget);
+        return result;
+      }
+
+      Object.defineProperty(
+        insertBeforeReturnGuard,
+        '__mysearchReturnFlowInsertBeforeHook',
+        { value: true },
+      );
+      nodePrototype.insertBefore = insertBeforeReturnGuard;
+    }
+  }
+
+  installSynchronousReturnFlowInsertionHooks();
 
   const observer = new MutationObserver((mutations) => {
     // Applying an already-equal property does not write, so the follow-up settles.
@@ -276,6 +861,17 @@
     attributeFilter: ['class', 'id', 'style', 'src', 'srcset', 'poster', 'href', 'role', 'aria-modal', 'aria-hidden', 'hidden', 'data-e2e', 'data-note-id', 'autoplay'],
   });
 
+  function onPotentialDetailClose(event) {
+    if (!returnGuardSupported || !enabled) return;
+    if (event.type === 'keydown' &&
+        !['Escape', 'Enter', ' '].includes(event.key)) return;
+    if (!returnGuardActive() && !detailOverlayOpen && !detailReturnPending) return;
+    // 捕获阶段先启用CSS，早于站点自己的关闭、克隆和路由处理器。
+    armReturnGuard();
+  }
+  document.addEventListener('pointerdown', onPotentialDetailClose, true);
+  document.addEventListener('keydown', onPotentialDetailClose, true);
+
   function onMediaEvent(event) {
     const video = event.target;
     if (video?.tagName !== 'VIDEO') return;
@@ -299,6 +895,7 @@
 
   function applySettings(settings) {
     enabled = settingsApi.normalize(settings)[adapter.domain];
+    if (!enabled) clearReturnGuard();
     schedule();
   }
   chrome.storage.onChanged.addListener((changes, area) => {
