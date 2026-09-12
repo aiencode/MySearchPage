@@ -693,6 +693,14 @@ function makeEdgePendingLockLifecycle() {
 async function runRealNavigationSearch({ keyword, activateQuickMatch, edgeLifecycle }) {
   const source = read('extension/navigation/navigation.js');
   const activateSource = extractFunction(source, 'function activateCurrentMatch()');
+  const legacyOpenSource = extractFunction(
+    source,
+    'async function openSearchResultWithLegacyBackground(keyword, url)'
+  );
+  const openSearchResultSource = extractFunction(
+    source,
+    'function openSearchResult(url)'
+  );
   const unifiedSearchSource = extractFunction(source, 'function search(site, immediate = false)')
     .replace('function search(', 'function unifiedSearch(');
   const realAddToHistorySource = extractFunction(source, 'async function addToHistory(keyword)')
@@ -717,6 +725,10 @@ async function runRealNavigationSearch({ keyword, activateQuickMatch, edgeLifecy
   };
   const opened = [];
   const unifiedCalls = [];
+  const blockingRuleStatus = {
+    dataset: {},
+    textContent: '',
+  };
   const button = {
     hasAttribute(name) { return name === 'data-site'; },
     getAttribute(name) { return name === 'data-site' ? 'bilibili' : null; },
@@ -735,6 +747,7 @@ async function runRealNavigationSearch({ keyword, activateQuickMatch, edgeLifecy
     historyList,
     opened,
     unifiedCalls,
+    blockingRuleStatus,
     recordingPromise: null,
     isEditMode: false,
     doesSiteAllowSearch() { return true; },
@@ -768,19 +781,59 @@ async function runRealNavigationSearch({ keyword, activateQuickMatch, edgeLifecy
     editHistoryItem() {},
     updatePositionMemory() {},
     navigator: { clipboard: { writeText() { return Promise.resolve(); } } },
+    chrome: {
+      runtime: {
+        lastError: null,
+        sendMessage(message, callback) {
+          assert.equal(message.type, 'OPEN_SEARCH_RESULT');
+          assert.equal(message.keyword, keyword);
+          assert.equal(typeof message.targetUrl, 'string');
+          edgeLifecycle?.onWindowOpen();
+          opened.push({
+            url: message.targetUrl,
+            target: '_blank',
+          });
+          callback({
+            success: true,
+            opened: true,
+            blocked: false,
+            sessionEnabled: true,
+          });
+        },
+      },
+      tabs: {
+        async getCurrent() {
+          return { id: 1 };
+        },
+        async create() {
+          throw new Error(
+            'the current background path must create the result tab'
+          );
+        },
+      },
+    },
+    setTimeout,
+    clearTimeout,
     window: {
-      open(url, target) {
-        edgeLifecycle?.onWindowOpen();
-        opened.push({ url, target });
+      open() {
+        throw new Error(
+          'extension new-tab search must not bypass OPEN_SEARCH_RESULT'
+        );
       },
     },
     console: { error() {}, log() {}, warn() {} },
     encodeURIComponent,
   };
   sandbox.globalThis = sandbox;
+  sandbox.MySearchBlockingRules = {
+    isUnknownMessageResponse(response, messageType) {
+      return response?.success !== true &&
+        response?.error === `Unknown message type: ${messageType}`;
+    },
+  };
   vm.createContext(sandbox);
   const action = activateQuickMatch ? 'activateCurrentMatch();' : "search('bilibili', true);";
-  const recordingPromise = vm.runInContext(`${renderHistorySource}\n${realAddToHistorySource}\n${unifiedSearchSource}
+  const recordingPromise = vm.runInContext(`${renderHistorySource}\n${realAddToHistorySource}\n${legacyOpenSource}\n${openSearchResultSource}\n${unifiedSearchSource}
 function addToHistory(...args) { recordingPromise = realAddToHistory(...args); return recordingPromise; }
 function search(...args) { unifiedCalls.push(args); return unifiedSearch(...args); }
 ${activateSource}

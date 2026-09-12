@@ -174,6 +174,80 @@ body {
   display: none;
 }
 
+.blocking-dashboard,
+.blocking-stats-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.blocking-keyword-manager,
+.blocking-keyword-list-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.blocking-keyword-add-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+
+#blocking-keywords-batch {
+  min-width: 0;
+  min-height: 58px;
+  flex: 1 1 320px;
+  resize: vertical;
+  border: 1px solid #aaa;
+  padding: 4px;
+  font: inherit;
+}
+
+.blocking-keyword-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 150px;
+  margin: 0;
+  padding: 4px;
+  overflow: auto;
+  border: 1px solid #ccc;
+  list-style: none;
+}
+
+.blocking-keyword-list:empty::after {
+  content: "暂无封禁词";
+  color: #777;
+  font-size: 12px;
+}
+
+.blocking-keyword-list li {
+  padding: 2px 5px;
+  border: 1px solid #bbb;
+  background: #f5f5f5;
+  overflow-wrap: anywhere;
+}
+
+.blocking-stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.blocking-stats-table th,
+.blocking-stats-table td {
+  height: 24px;
+  padding: 1px;
+  border: 1px solid #ccc;
+  font-size: 12px;
+  text-align: left;
+}
+
+.blocking-stats-table th {
+  background: #f5f5f5;
+}
+
 .toggle-switch {
   position: relative;
   display: inline-block;
@@ -615,6 +689,17 @@ input:focus-visible + .toggle-slider,
     height: 20px;
   }
 
+  .blocking-dashboard,
+  .blocking-stats-grid {
+    gap: 2px;
+  }
+
+  .blocking-stats-table th,
+  .blocking-stats-table td {
+    height: 18px;
+    font-size: 10px;
+  }
+
   .options-container {
     padding: 1px 2px;
   }
@@ -785,6 +870,17 @@ input:focus-visible + .toggle-slider,
   .search-media-choice input {
     width: 18px;
     height: 18px;
+  }
+
+  .blocking-dashboard,
+  .blocking-stats-grid {
+    gap: 1px;
+  }
+
+  .blocking-stats-table th,
+  .blocking-stats-table td {
+    height: 14px;
+    font-size: 8px;
   }
 
   .options-container {

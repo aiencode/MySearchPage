@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "blockedKeywords": [],
+  "blockedUrlPatterns": [],
+  "highRiskDomains": [
+    "xiaohongshu.com",
+    "douyin.com",
+    "bilibili.com",
+    "youtube.com"
+  ]
+}

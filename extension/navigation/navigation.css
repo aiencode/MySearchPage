@@ -82,6 +82,34 @@
             gap: 6px; /* 统一视觉间距 */
         }
 
+        .blocking-rule-inline-controls {
+            display: inline-flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .blocking-rule-inline-controls label {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            white-space: nowrap;
+            font-size: 14px;
+        }
+
+        .blocking-rule-inline-controls input[type="radio"] {
+            margin: 0;
+        }
+
+        #blocking-rule-status {
+            min-height: 1.2em;
+            font-size: 12px;
+        }
+
+        #blocking-rule-status[data-state="error"] {
+            color: #b00020;
+        }
+
         button {
             padding: 2px 6px; /* 统一左右padding为6px */
             border: 1px solid #000;
@@ -583,6 +611,19 @@
                 white-space: normal;
                 overflow: visible;
                 text-overflow: clip;
+            }
+
+            .blocking-rule-inline-controls {
+                gap: 2px;
+            }
+
+            .blocking-rule-inline-controls label {
+                gap: 1px;
+                font-size: 12px;
+            }
+
+            #blocking-rule-status {
+                font-size: 11px;
             }
 
             .history-header {
@@ -1114,4 +1155,3 @@
         .table-resizing * {
             cursor: col-resize !important;
         }
-    

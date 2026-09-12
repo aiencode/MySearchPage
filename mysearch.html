@@ -89,6 +89,34 @@
             gap: 6px; /* 统一视觉间距 */
         }
 
+        .blocking-rule-inline-controls {
+            display: inline-flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .blocking-rule-inline-controls label {
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+            white-space: nowrap;
+            font-size: 14px;
+        }
+
+        .blocking-rule-inline-controls input[type="radio"] {
+            margin: 0;
+        }
+
+        #blocking-rule-status {
+            min-height: 1.2em;
+            font-size: 12px;
+        }
+
+        #blocking-rule-status[data-state="error"] {
+            color: #b00020;
+        }
+
         button {
             padding: 2px 6px; /* 统一左右padding为6px */
             border: 1px solid #000;
@@ -590,6 +618,19 @@
                 white-space: normal;
                 overflow: visible;
                 text-overflow: clip;
+            }
+
+            .blocking-rule-inline-controls {
+                gap: 2px;
+            }
+
+            .blocking-rule-inline-controls label {
+                gap: 1px;
+                font-size: 12px;
+            }
+
+            #blocking-rule-status {
+                font-size: 11px;
             }
 
             .history-header {
@@ -2419,6 +2460,199 @@
         settingsBtn.textContent = '设置';
         document.querySelector('.control-buttons').appendChild(settingsBtn);
 
+        const blockingRuleControls = document.createElement('span');
+        blockingRuleControls.className = 'blocking-rule-inline-controls';
+        blockingRuleControls.setAttribute('aria-label', '添加阻断规则');
+        blockingRuleControls.innerHTML = `
+            <label>
+                <input type="radio" name="blocking-rule-scope" value="keyword" checked>
+                仅关键词
+            </label>
+            <label>
+                <input type="radio" name="blocking-rule-scope" value="url">
+                仅 URL
+            </label>
+            <label>
+                <input type="radio" name="blocking-rule-scope" value="both">
+                关键词和 URL
+            </label>
+            <button id="add-blocking-rule" type="button">添加阻断规则</button>
+            <span id="blocking-rule-status" role="status" aria-live="polite"></span>
+        `;
+        if (typeof settingsBtn.insertAdjacentElement === 'function') {
+            settingsBtn.insertAdjacentElement('afterend', blockingRuleControls);
+        } else {
+            document.querySelector('.control-buttons')
+                .appendChild(blockingRuleControls);
+        }
+
+        const addBlockingRuleBtn =
+            blockingRuleControls.querySelector('#add-blocking-rule');
+        const blockingRuleStatus =
+            blockingRuleControls.querySelector('#blocking-rule-status');
+
+        function addBlockingRuleThroughExtension(value, scope) {
+            return new Promise((resolve, reject) => {
+                const requestId =
+                    window.crypto?.randomUUID?.() ||
+                    `blocking-rule-${Date.now()}-${Math.random()
+                        .toString(36)
+                        .slice(2)}`;
+                const expectedOrigin = window.location.origin;
+                const targetOrigin =
+                    expectedOrigin === 'null' ? '*' : expectedOrigin;
+
+                const timeout = window.setTimeout(() => {
+                    window.removeEventListener('message', handleResponse);
+                    reject(new Error('插件响应超时，请确认插件已启用'));
+                }, 5000);
+
+                function handleResponse(event) {
+                    if (
+                        event.source !== window ||
+                        event.origin !== expectedOrigin ||
+                        event.data?.type !==
+                            'MYSEARCH_BLOCKING_RULE_RESPONSE' ||
+                        event.data.requestId !== requestId
+                    ) {
+                        return;
+                    }
+
+                    window.clearTimeout(timeout);
+                    window.removeEventListener('message', handleResponse);
+                    if (!event.data.success) {
+                        reject(new Error(
+                            event.data.error || '阻断规则保存失败'
+                        ));
+                        return;
+                    }
+                    resolve(event.data);
+                }
+
+                window.addEventListener('message', handleResponse);
+                window.postMessage({
+                    type: 'MYSEARCH_BLOCKING_RULE_REQUEST',
+                    requestId,
+                    value,
+                    scope,
+                }, targetOrigin);
+            });
+        }
+
+        function openSearchResultThroughExtension(keyword, targetUrl) {
+            return new Promise((resolve, reject) => {
+                const requestId =
+                    window.crypto?.randomUUID?.() ||
+                    `search-open-${Date.now()}-${Math.random()
+                        .toString(36)
+                        .slice(2)}`;
+                const expectedOrigin = window.location.origin;
+                const targetOrigin =
+                    expectedOrigin === 'null' ? '*' : expectedOrigin;
+
+                const timeout = window.setTimeout(() => {
+                    window.removeEventListener('message', handleResponse);
+                    reject(new Error(
+                        '插件响应超时，请确认插件已启用'
+                    ));
+                }, 5000);
+
+                function handleResponse(event) {
+                    if (
+                        event.source !== window ||
+                        event.origin !== expectedOrigin ||
+                        event.data?.type !==
+                            'MYSEARCH_SEARCH_OPEN_RESPONSE' ||
+                        event.data.requestId !== requestId
+                    ) {
+                        return;
+                    }
+
+                    window.clearTimeout(timeout);
+                    window.removeEventListener('message', handleResponse);
+                    if (!event.data.success) {
+                        reject(new Error(
+                            event.data.error || '搜索请求失败'
+                        ));
+                        return;
+                    }
+                    resolve(event.data);
+                }
+
+                window.addEventListener('message', handleResponse);
+                window.postMessage({
+                    type: 'MYSEARCH_SEARCH_OPEN_REQUEST',
+                    requestId,
+                    keyword,
+                    targetUrl,
+                }, targetOrigin);
+            });
+        }
+
+        async function openSearchResult(url, keyword) {
+            blockingRuleStatus.dataset.state = '';
+            blockingRuleStatus.textContent = '正在检查…';
+            try {
+                const response = await openSearchResultThroughExtension(
+                    keyword,
+                    url
+                );
+                if (response.blocked) {
+                    blockingRuleStatus.dataset.state = 'error';
+                    blockingRuleStatus.textContent =
+                        response.match?.kind === 'url'
+                            ? '该搜索地址已阻断'
+                            : '该搜索词已阻断';
+                    searchInput.focus();
+                    return false;
+                }
+                if (!response.opened) {
+                    throw new Error('搜索页面未打开');
+                }
+                blockingRuleStatus.textContent = '';
+                return true;
+            } catch (error) {
+                blockingRuleStatus.dataset.state = 'error';
+                blockingRuleStatus.textContent =
+                    error?.message || '搜索请求失败';
+                return false;
+            }
+        }
+
+        addBlockingRuleBtn.addEventListener('click', async () => {
+            const value = searchInput.value.trim();
+            const selectedScope = blockingRuleControls.querySelector(
+                'input[name="blocking-rule-scope"]:checked'
+            );
+            const scope = selectedScope?.value;
+
+            if (!value) {
+                blockingRuleStatus.dataset.state = 'error';
+                blockingRuleStatus.textContent = '请先输入规则内容';
+                searchInput.focus();
+                return;
+            }
+
+            if (!['keyword', 'url', 'both'].includes(scope)) {
+                blockingRuleStatus.dataset.state = 'error';
+                blockingRuleStatus.textContent = '规则类型无效';
+                return;
+            }
+
+            addBlockingRuleBtn.disabled = true;
+            blockingRuleStatus.dataset.state = '';
+            blockingRuleStatus.textContent = '正在添加…';
+            try {
+                await addBlockingRuleThroughExtension(value, scope);
+                blockingRuleStatus.textContent = '规则已添加';
+            } catch (error) {
+                blockingRuleStatus.dataset.state = 'error';
+                blockingRuleStatus.textContent = error.message;
+            } finally {
+                addBlockingRuleBtn.disabled = false;
+            }
+        });
+
         // 编辑状态标志
         let isEditMode = false;
         let isEditingHistory = false;
@@ -4228,7 +4462,7 @@
                         } else {
                             url = buildSearchUrl(site, siteUrl, '', needsKeyword);
                         }
-                        window.open(url, '_blank');
+                        void openSearchResult(url, keyword);
                     } else {
                         currentItem.element.click();
                     }
@@ -4345,7 +4579,7 @@
             return mode === SITE_MODES.BOTH || mode === SITE_MODES.NO_BLANK;
         }
 
-        function search(site, immediate = false) {
+        async function search(site, immediate = false) {
             console.log(`搜索函数：site=${site}, keyword="${searchInput.value.trim()}"`);
             const keyword = searchInput.value.trim();
 
@@ -4383,9 +4617,10 @@
                     });
                 }
                 
-                addToHistory(keyword);
                 const url = buildSearchUrl(site, siteUrl, keyword, needsKeyword);
-                window.open(url, '_blank');
+                if (await openSearchResult(url, keyword)) {
+                    addToHistory(keyword);
+                }
             } else {
                 // 无关键词：检查是否允许空白打开
                 const allowBlank = doesSiteAllowBlank(site);
@@ -4408,14 +4643,15 @@
                 
                 // 允许空白打开主页
                 const url = buildSearchUrl(site, siteUrl, '', needsKeyword);
-                window.open(url, '_blank');
+                await openSearchResult(url, '');
             }
         }
 
         // 批量搜索函数 - 统一处理逻辑
-        function batchSearch(buttons) {
+        async function batchSearch(buttons) {
             const keyword = searchInput.value.trim();
             const processedSites = new Set(); // 用集合去重
+            const openRequests = [];
 
             // 遍历所有按钮元素
             for (const button of buttons) {
@@ -4447,10 +4683,11 @@
                     url = buildSearchUrl(site, siteUrl, '', needsKeyword);
                 }
 
-                window.open(url, '_blank');
+                openRequests.push(openSearchResult(url, keyword));
             }
 
-            if (keyword) {
+            const opened = await Promise.all(openRequests);
+            if (keyword && opened.some(Boolean)) {
                 addToHistory(keyword);
             }
         }

@@ -1083,6 +1083,7 @@
         const errorModal = document.getElementById('error-modal');
         const quicksearchinput = document.getElementById('quick-search-input');
         const mobileEscBtn = document.getElementById('mobile-esc-btn');
+
         // 网站设置已经迁移到插件 Options 页面；保留空值只为兼容下方主页面快捷键判断。
         const settingsModal = null;
         const settingsSearchInput = null;
@@ -1211,6 +1212,130 @@
         settingsBtn.id = 'settings';
         settingsBtn.textContent = '设置';
         document.querySelector('.control-buttons').appendChild(settingsBtn);
+
+        const blockingRuleControls = document.createElement('span');
+        blockingRuleControls.className = 'blocking-rule-inline-controls';
+        blockingRuleControls.setAttribute('aria-label', '添加阻断规则');
+        blockingRuleControls.innerHTML = `
+            <label>
+                <input type="radio" name="blocking-rule-scope" value="keyword" checked>
+                仅关键词
+            </label>
+            <label>
+                <input type="radio" name="blocking-rule-scope" value="url">
+                仅 URL
+            </label>
+            <label>
+                <input type="radio" name="blocking-rule-scope" value="both">
+                关键词和 URL
+            </label>
+            <button id="add-blocking-rule" type="button">添加阻断规则</button>
+            <span id="blocking-rule-status" role="status" aria-live="polite"></span>
+        `;
+        if (typeof settingsBtn.insertAdjacentElement === 'function') {
+            settingsBtn.insertAdjacentElement('afterend', blockingRuleControls);
+        } else {
+            document.querySelector('.control-buttons')
+                .appendChild(blockingRuleControls);
+        }
+
+        const addBlockingRuleBtn =
+            blockingRuleControls.querySelector('#add-blocking-rule');
+        const blockingRuleStatus =
+            blockingRuleControls.querySelector('#blocking-rule-status');
+
+        const blockingRulesApi = globalThis.MySearchBlockingRules;
+        function sendBlockingRuleMessage(value, scope) {
+            return new Promise((resolve, reject) => {
+                let settled = false;
+                const timeout = setTimeout(() => {
+                    if (settled) return;
+                    settled = true;
+                    reject(new Error('插件响应超时'));
+                }, 5000);
+
+                try {
+                    chrome.runtime.sendMessage({
+                        type: 'ADD_BLOCKING_RULE',
+                        value,
+                        scope,
+                    }, response => {
+                        if (settled) return;
+                        settled = true;
+                        clearTimeout(timeout);
+
+                        const runtimeError = chrome.runtime.lastError;
+                        if (runtimeError) {
+                            reject(new Error(runtimeError.message));
+                            return;
+                        }
+                        if (!response?.success) {
+                            if (
+                                blockingRulesApi
+                                    ?.isUnknownAddRuleResponse(response)
+                            ) {
+                                void blockingRulesApi
+                                    .addRuleToStorage(value, scope)
+                                    .then(rules => {
+                                        resolve({
+                                            success: true,
+                                            rules,
+                                        });
+                                    })
+                                    .catch(reject);
+                                return;
+                            }
+                            reject(new Error(
+                                response?.error || '阻断规则保存失败'
+                            ));
+                            return;
+                        }
+                        resolve(response);
+                    });
+                } catch (error) {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timeout);
+                    reject(error);
+                }
+            });
+        }
+
+        addBlockingRuleBtn?.addEventListener('click', async () => {
+            const value = searchInput.value.trim();
+            const selectedScope = blockingRuleControls.querySelector(
+                'input[name="blocking-rule-scope"]:checked'
+            );
+            const scope = selectedScope?.value;
+
+            if (!value) {
+                blockingRuleStatus.dataset.state = 'error';
+                blockingRuleStatus.textContent = '请先输入规则内容';
+                searchInput.focus();
+                return;
+            }
+
+            if (!['keyword', 'url', 'both'].includes(scope)) {
+                blockingRuleStatus.dataset.state = 'error';
+                blockingRuleStatus.textContent = '规则类型无效';
+                return;
+            }
+
+            addBlockingRuleBtn.disabled = true;
+            blockingRuleStatus.dataset.state = '';
+            blockingRuleStatus.textContent = '正在添加…';
+            try {
+                await sendBlockingRuleMessage(value, scope);
+                blockingRuleStatus.textContent = '规则已添加';
+            } catch (error) {
+                blockingRuleStatus.dataset.state = 'error';
+                blockingRuleStatus.textContent =
+                    error?.message || '阻断规则保存失败';
+            } finally {
+                addBlockingRuleBtn.disabled = false;
+            }
+        });
+
         settingsBtn.addEventListener('click', () => {
             chrome.runtime.openOptionsPage();
         });
@@ -3048,6 +3173,185 @@
             return mode === SITE_MODES.BOTH || mode === SITE_MODES.NO_BLANK;
         }
 
+        async function openSearchResultWithLegacyBackground(keyword, url) {
+            const rules = await MySearchBlockingRules.getRulesFromStorage();
+            const blockedKeyword = MySearchBlockingRules.findKeyword(
+                keyword,
+                rules.blockedKeywords
+            );
+            if (blockedKeyword) {
+                return {
+                    success: true,
+                    opened: false,
+                    blocked: true,
+                    match: {
+                        kind: 'keyword',
+                        value: blockedKeyword,
+                    },
+                };
+            }
+
+            const blockedUrlPattern =
+                MySearchBlockingRules.findUrlPattern(
+                    url,
+                    rules.blockedUrlPatterns
+                );
+            if (blockedUrlPattern) {
+                return {
+                    success: true,
+                    opened: false,
+                    blocked: true,
+                    match: {
+                        kind: 'url',
+                        value: blockedUrlPattern,
+                    },
+                };
+            }
+
+            const session = await new Promise((resolve) => {
+                try {
+                    chrome.runtime.sendMessage({
+                        type: 'START_SEARCH_SESSION',
+                        targetUrl: url,
+                    }, (response) => {
+                        void chrome.runtime.lastError;
+                        resolve(response || {});
+                    });
+                } catch (error) {
+                    resolve({});
+                }
+            });
+
+            const currentTab =
+                typeof chrome.tabs?.getCurrent === 'function'
+                    ? await chrome.tabs.getCurrent()
+                    : null;
+            const createProperties = {
+                url,
+                active: true,
+            };
+            if (Number.isInteger(currentTab?.id)) {
+                createProperties.openerTabId = currentTab.id;
+            }
+            const tab = await chrome.tabs.create(createProperties);
+
+            return {
+                success: true,
+                opened: true,
+                blocked: false,
+                sessionEnabled: session?.enabled === true,
+                sessionId: session?.sessionId || '',
+                tabId: tab?.id,
+            };
+        }
+
+        function openSearchResult(url) {
+            const keyword = searchInput.value.trim();
+            const status = typeof blockingRuleStatus === 'undefined'
+                ? null
+                : blockingRuleStatus;
+
+            if (status) {
+                status.dataset.state = '';
+                status.textContent = '正在检查阻断规则…';
+            }
+
+            return new Promise((resolve) => {
+                let settled = false;
+                const finish = (response) => {
+                    if (settled) return;
+                    settled = true;
+                    clearTimeout(timeout);
+
+                    if (!response?.success) {
+                        if (status) {
+                            status.dataset.state = 'error';
+                            status.textContent =
+                                response?.error || '搜索检查失败，请重试';
+                        }
+                        resolve(false);
+                        return;
+                    }
+
+                    if (response.blocked) {
+                        if (status) {
+                            status.dataset.state = 'error';
+                            status.textContent = response.match?.kind === 'url'
+                                ? `已阻断包含 URL 规则“${response.match.value}”的搜索`
+                                : `已阻断关键词“${response.match?.value || keyword}”`;
+                        }
+                        searchInput.focus?.();
+                        resolve(false);
+                        return;
+                    }
+
+                    if (!response.opened) {
+                        if (status) {
+                            status.dataset.state = 'error';
+                            status.textContent = '搜索页未能打开，请重试';
+                        }
+                        resolve(false);
+                        return;
+                    }
+
+                    if (status) {
+                        status.dataset.state = '';
+                        status.textContent = '';
+                    }
+                    resolve(true);
+                };
+
+                const timeout = setTimeout(() => {
+                    finish({
+                        success: false,
+                        error: '插件响应超时，未打开搜索页',
+                    });
+                }, 5000);
+
+                try {
+                    chrome.runtime.sendMessage({
+                        type: 'OPEN_SEARCH_RESULT',
+                        keyword,
+                        targetUrl: url,
+                    }, (response) => {
+                        const runtimeError = chrome.runtime.lastError;
+                        if (runtimeError) {
+                            finish({
+                                success: false,
+                                error: runtimeError.message,
+                            });
+                            return;
+                        }
+                        if (
+                            MySearchBlockingRules.isUnknownMessageResponse(
+                                response,
+                                'OPEN_SEARCH_RESULT'
+                            )
+                        ) {
+                            void openSearchResultWithLegacyBackground(
+                                keyword,
+                                url
+                            ).then(finish, (error) => {
+                                finish({
+                                    success: false,
+                                    error:
+                                        error?.message ||
+                                        '搜索兼容处理失败，请重试',
+                                });
+                            });
+                            return;
+                        }
+                        finish(response);
+                    });
+                } catch (error) {
+                    finish({
+                        success: false,
+                        error: error?.message || '搜索检查失败，请重试',
+                    });
+                }
+            });
+        }
+
         function search(site, immediate = false) {
             console.log(`搜索函数：site=${site}, keyword="${searchInput.value.trim()}"`);
             const keyword = searchInput.value.trim();
@@ -3087,7 +3391,7 @@
                 }
                 
                 const url = buildSearchUrl(site, siteUrl, keyword, needsKeyword);
-                window.open(url, '_blank');
+                openSearchResult(url);
                 addToHistory(keyword);
             } else {
                 // 无关键词：检查是否允许空白打开
@@ -3111,7 +3415,7 @@
                 
                 // 允许空白打开主页
                 const url = buildSearchUrl(site, siteUrl, '', needsKeyword);
-                window.open(url, '_blank');
+                openSearchResult(url);
             }
         }
 
@@ -3150,7 +3454,7 @@
                     url = buildSearchUrl(site, siteUrl, '', needsKeyword);
                 }
 
-                window.open(url, '_blank');
+                openSearchResult(url);
             }
 
             if (keyword) {

@@ -2,6 +2,7 @@
 (function () {
   'use strict';
 
+  const RECONNECT_EVENT = 'mysearch-search-media-reconnect';
   const settingsApi = globalThis.SearchMediaSettings;
   if (!settingsApi) return;
   const STORAGE_KEY = settingsApi.storageKey;
@@ -10,6 +11,13 @@
     location.hostname === domain || location.hostname.endsWith(`.${domain}`)
   ));
   if (!adapter || !globalThis.chrome?.storage?.local) return;
+  if (globalThis.__mySearchMediaControllerActive) {
+    if (typeof globalThis.Event === 'function') {
+      globalThis.dispatchEvent?.(new globalThis.Event(RECONNECT_EVENT));
+    }
+    return;
+  }
+  globalThis.__mySearchMediaControllerActive = true;
 
   const styles = new Map();
   const players = new Map();
@@ -25,6 +33,8 @@
   const RETURN_GUARD_ATTR = 'data-mysearch-media-return-guard';
   const RETURN_CARD_ATTR = 'data-mysearch-media-return-card';
   const RETURN_GUARD_STYLE_ID = 'mysearch-media-return-guard-style';
+  const STYLE_LEDGER_ATTR = 'data-mysearch-media-style-ledger';
+  const PLAYER_LEDGER_ATTR = 'data-mysearch-media-player-ledger';
   const returnGuardSupported = adapter.domain === 'xiaohongshu.com' &&
     Boolean(adapter.flowRoot && adapter.cardLayout && adapter.rootLayout);
   let returnGuardReleaseFrame = null;
@@ -573,6 +583,75 @@ html[${RETURN_GUARD_ATTR}] ${root} {
     else node.style.removeProperty(property);
   }
 
+  function writeStyleLedger(node, properties) {
+    if (!node?.setAttribute || !node?.removeAttribute) return;
+    if (!properties.size) {
+      node.removeAttribute(STYLE_LEDGER_ATTR);
+      return;
+    }
+    const ledger = {};
+    for (const [property, state] of properties) {
+      ledger[property] = {
+        original: state.original,
+        applied: state.applied,
+      };
+    }
+    node.setAttribute(STYLE_LEDGER_ATTR, JSON.stringify(ledger));
+  }
+
+  function recoverOrphanedOverrides() {
+    for (const node of query(document, `[${STYLE_LEDGER_ATTR}]`)) {
+      try {
+        const ledger = JSON.parse(
+          node.getAttribute(STYLE_LEDGER_ATTR) || '{}'
+        );
+        for (const [property, state] of Object.entries(ledger)) {
+          if (
+            state?.original &&
+            state?.applied &&
+            sameStyle(readStyle(node, property), state.applied)
+          ) {
+            if (state.original.value) {
+              node.style.setProperty(
+                property,
+                state.original.value,
+                state.original.priority || ''
+              );
+            } else {
+              node.style.removeProperty(property);
+            }
+          }
+        }
+      } catch (error) {
+        // 无法验证来源的旧标记不用于猜测原站样式。
+      }
+      node.removeAttribute(STYLE_LEDGER_ATTR);
+    }
+
+    for (const video of query(
+      document,
+      `video[${PLAYER_LEDGER_ATTR}]`
+    )) {
+      try {
+        const state = JSON.parse(
+          video.getAttribute(PLAYER_LEDGER_ATTR) || '{}'
+        );
+        if (video.muted === true && typeof state.muted === 'boolean') {
+          video.muted = state.muted;
+        }
+        if (
+          video.autoplay === false &&
+          typeof state.autoplay === 'boolean'
+        ) {
+          video.autoplay = state.autoplay;
+        }
+      } catch (error) {
+        // 无效账本只移除，不修改当前站点状态。
+      }
+      video.removeAttribute(PLAYER_LEDGER_ATTR);
+    }
+  }
+
   function applyStyles(desired) {
     for (const [node, properties] of styles) {
       const next = desired.get(node);
@@ -583,6 +662,7 @@ html[${RETURN_GUARD_ATTR}] ${root} {
         }
       }
       if (!properties.size) styles.delete(node);
+      writeStyleLedger(node, properties);
     }
     for (const [node, properties] of desired) {
       let saved = styles.get(node);
@@ -604,6 +684,7 @@ html[${RETURN_GUARD_ATTR}] ${root} {
         state.applied = readStyle(node, property);
         state.requested = value;
       }
+      writeStyleLedger(node, saved);
     }
   }
 
@@ -618,15 +699,22 @@ html[${RETURN_GUARD_ATTR}] ${root} {
     }
     if (!video.muted) video.muted = true;
     if (video.autoplay) video.autoplay = false;
+    video.setAttribute?.(PLAYER_LEDGER_ATTR, JSON.stringify({
+      muted: state.muted,
+      autoplay: state.autoplay,
+    }));
     if (!video.paused) video.pause();
   }
 
   function restorePlayer(video, state) {
     if (video.muted === true) video.muted = state.muted;
     if (video.autoplay === false) video.autoplay = state.autoplay;
+    video.removeAttribute?.(PLAYER_LEDGER_ATTR);
     // Let the site's detail player or the user decide when playback starts.
     players.delete(video);
   }
+
+  recoverOrphanedOverrides();
 
   function reconcile() {
     scheduled = false;
@@ -887,6 +975,7 @@ html[${RETURN_GUARD_ATTR}] ${root} {
   for (const event of ['popstate', 'hashchange', 'pageshow', 'resize', ...adapter.routeEvents]) {
     window.addEventListener(event, schedule, true);
   }
+  window.addEventListener(RECONNECT_EVENT, schedule, true);
   document.addEventListener('visibilitychange', schedule);
   // Isolated-world history hooks do not reliably see the page's own pushState calls.
   setInterval(() => {

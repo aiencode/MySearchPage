@@ -72,6 +72,71 @@
       <p class="search-media-status" id="search-media-status" role="status" aria-live="polite"></p>
     </section>
 
+    <section class="section blocking-dashboard" aria-labelledby="blocking-dashboard-title">
+      <div class="section-header">
+        <h2 class="section-title" id="blocking-dashboard-title">阻断策略与效果</h2>
+        <div class="section-actions">
+          <button id="blocking-stats-refresh" class="btn btn-sm btn-secondary" type="button">刷新统计</button>
+          <button id="blocking-policy-import" class="btn btn-sm btn-secondary" type="button">追加导入策略</button>
+          <button id="blocking-policy-export" class="btn btn-sm btn-secondary" type="button">导出策略</button>
+          <button id="search-media-reconnect" class="btn btn-sm btn-secondary" type="button">重连旧标签</button>
+          <button id="search-media-diagnostics" class="btn btn-sm btn-secondary" type="button">线上兼容诊断</button>
+          <input id="blocking-policy-file" type="file" accept=".json,application/json" hidden>
+        </div>
+      </div>
+      <div class="blocking-keyword-manager">
+        <label for="blocking-keywords-batch">批量新增封禁词（每行一个）</label>
+        <div class="blocking-keyword-add-row">
+          <textarea
+            id="blocking-keywords-batch"
+            rows="3"
+            maxlength="65535"
+            placeholder="每行输入一个封禁词"
+          ></textarea>
+          <button
+            id="blocking-keywords-add"
+            class="btn btn-sm btn-primary"
+            type="button"
+          >批量新增</button>
+        </div>
+        <div class="blocking-keyword-list-wrap">
+          <strong id="blocking-keyword-count">全部封禁词（0）</strong>
+          <ul
+            id="blocking-keyword-list"
+            class="blocking-keyword-list"
+            aria-labelledby="blocking-keyword-count"
+          ></ul>
+        </div>
+      </div>
+      <div class="blocking-stats-grid">
+        <table class="blocking-stats-table">
+          <thead>
+            <tr>
+              <th>范围</th>
+              <th>曝光</th>
+              <th>阻断点击</th>
+              <th>depth 3</th>
+              <th>尝试率</th>
+            </tr>
+          </thead>
+          <tbody id="blocking-stats-periods"></tbody>
+        </table>
+        <table class="blocking-stats-table">
+          <thead>
+            <tr>
+              <th>负反馈</th>
+              <th>次数</th>
+              <th>已测量</th>
+              <th>10分钟内重试</th>
+              <th>重试率</th>
+            </tr>
+          </thead>
+          <tbody id="blocking-feedback-stats"></tbody>
+        </table>
+      </div>
+      <p id="blocking-dashboard-status" class="search-media-status" role="status" aria-live="polite"></p>
+    </section>
+
     <!-- 全局设置 -->
     <section class="section">
       <h2 class="section-title">全局设置</h2>
@@ -173,5 +238,7 @@
   <script src="options.js"></script>
   <script src="../shared/search-media-settings.js"></script>
   <script src="search-media-settings.js"></script>
+  <script src="../shared/blocking-rules.js"></script>
+  <script src="blocking-dashboard.js"></script>
 </body>
 </html>
