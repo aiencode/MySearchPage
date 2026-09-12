@@ -968,10 +968,67 @@
         pointer-events: none !important;
       }
       #${NOTICE_ID}.feedback {
-        background: #eee !important;
+        top: 18px !important;
+        right: 18px !important;
+        max-width: min(460px, calc(100vw - 36px)) !important;
+        padding: 12px 16px !important;
+        border: 3px solid #8b0000 !important;
+        border-radius: 6px !important;
+        background: #fff1f1 !important;
+        color: #8b0000 !important;
+        font: bold 16px/1.35 Arial, sans-serif !important;
+        box-shadow: 0 4px 18px rgba(0, 0, 0, 0.38) !important;
       }
       html.mysearch-blocking-grayout {
         filter: grayscale(0.85) !important;
+      }
+      html.mysearch-blocking-feedback-flash::before {
+        content: "已阻断" !important;
+        position: fixed !important;
+        inset: 0 !important;
+        z-index: 2147483645 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        box-sizing: border-box !important;
+        border: 12px solid rgba(150, 0, 0, 0.82) !important;
+        background:
+          repeating-linear-gradient(
+            -45deg,
+            rgba(150, 0, 0, 0.13) 0,
+            rgba(150, 0, 0, 0.13) 18px,
+            rgba(255, 255, 255, 0.08) 18px,
+            rgba(255, 255, 255, 0.08) 36px
+          ) !important;
+        color: rgba(120, 0, 0, 0.9) !important;
+        font: bold min(11vw, 72px)/1 Arial, sans-serif !important;
+        pointer-events: none !important;
+      }
+      #mysearch-blocking-feedback-image {
+        position: fixed !important;
+        top: 50% !important;
+        left: 50% !important;
+        z-index: 2147483647 !important;
+        width: min(42vw, 220px) !important;
+        height: auto !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        border: 0 !important;
+        border-radius: 22px !important;
+        background: transparent !important;
+        box-shadow: 0 8px 28px rgba(0, 0, 0, 0.42) !important;
+        opacity: 0 !important;
+        visibility: hidden !important;
+        transform: translate(-50%, -50%) scale(0.92) !important;
+        transition:
+          opacity 90ms ease-out,
+          transform 90ms ease-out !important;
+        pointer-events: none !important;
+      }
+      #mysearch-blocking-feedback-image.visible {
+        opacity: 1 !important;
+        visibility: visible !important;
+        transform: translate(-50%, -50%) scale(1) !important;
       }
       [${DEPTH2_HIDDEN_ATTR}] {
         display: none !important;
@@ -1056,8 +1113,8 @@
   }
 
   function recordClick(match) {
-    if (!allowDeduplicatedAttempt(match)) return;
     const timestamp = now();
+    if (!allowDeduplicatedAttempt(match)) return timestamp;
     blockedClickCount += 1;
     void sendMessage({
       type: 'RECORD_BLOCKING_EVENT',
@@ -1075,9 +1132,16 @@
   }
 
   function showFeedback(match, timestamp) {
-    const types = ['toast', 'beep', 'grayout'];
-    const feedbackType = types[Math.floor(Math.random() * types.length)];
     const current = timestamp || now();
+    showTemporaryNotice(
+      `警告：内容已阻断，本次尝试已记录（第 ${blockedClickCount} 次）。`
+    );
+    flashBlockingFeedback();
+    showBlockingImageFeedback();
+
+    if (current - lastFeedbackAt < 300) return;
+
+    const feedbackType = 'warning+beep+flash+image';
     const interval = lastAttemptAt == null ? null : current - lastAttemptAt;
     if (lastFeedbackEventId && interval != null) {
       void sendMessage({
@@ -1105,12 +1169,56 @@
       },
     });
 
-    if (feedbackType === 'beep') playBeep();
-    if (feedbackType === 'grayout') {
-      global.document.documentElement.classList.add('mysearch-blocking-grayout');
-      global.setTimeout(() => global.document.documentElement.classList.remove('mysearch-blocking-grayout'), 700);
+    playBeep();
+  }
+
+  function flashBlockingFeedback() {
+    const root = global.document?.documentElement;
+    if (!root?.classList) return;
+    root.classList.add('mysearch-blocking-feedback-flash');
+    global.clearTimeout(flashBlockingFeedback.timer);
+    flashBlockingFeedback.timer = global.setTimeout(() => {
+      root.classList.remove('mysearch-blocking-feedback-flash');
+    }, 650);
+  }
+
+  function showBlockingImageFeedback() {
+    if (!canCreateDocumentNodes()) return;
+    const target = documentAppendTarget();
+    if (!target) return;
+
+    let image = global.document.getElementById(
+      'mysearch-blocking-feedback-image'
+    );
+    if (!image) {
+      image = global.document.createElement('img');
+      image.id = 'mysearch-blocking-feedback-image';
+      image.alt = '停止：内容已阻断';
+      image.setAttribute('aria-hidden', 'true');
+      image.src =
+        'data:image/svg+xml;charset=utf-8,' +
+        encodeURIComponent(
+          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240">' +
+          '<rect width="240" height="240" rx="24" fill="#fff"/>' +
+          '<path d="M78 18h84l60 60v84l-60 60H78l-60-60V78z" ' +
+          'fill="#c62828" stroke="#700000" stroke-width="8"/>' +
+          '<rect x="58" y="96" width="124" height="48" rx="12" fill="#fff"/>' +
+          '<text x="120" y="129" text-anchor="middle" ' +
+          'font-family="Arial,sans-serif" font-size="28" font-weight="700" ' +
+          'fill="#900000">STOP</text>' +
+          '<text x="120" y="184" text-anchor="middle" ' +
+          'font-family="sans-serif" font-size="22" font-weight="700" ' +
+          'fill="#fff">已阻断</text>' +
+          '</svg>'
+        );
+      target.appendChild(image);
     }
-    showTemporaryNotice(`内容已阻断，本次尝试已记录（第 ${blockedClickCount} 次）。`);
+
+    image.classList.add('visible');
+    global.clearTimeout(showBlockingImageFeedback.timer);
+    showBlockingImageFeedback.timer = global.setTimeout(() => {
+      image.classList.remove('visible');
+    }, 1200);
   }
 
   function playBeep() {
@@ -1121,13 +1229,28 @@
       const oscillator = context.createOscillator();
       const gain = context.createGain();
       oscillator.type = 'square';
-      oscillator.frequency.value = 180;
-      gain.gain.setValueAtTime(0.025, context.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.09);
+      oscillator.frequency.value = 220;
+      gain.gain.setValueAtTime(0.035, context.currentTime);
+      gain.gain.exponentialRampToValueAtTime(
+        0.001,
+        context.currentTime + 0.12
+      );
       oscillator.connect(gain).connect(context.destination);
-      oscillator.start();
-      oscillator.stop(context.currentTime + 0.09);
-      oscillator.addEventListener('ended', () => context.close().catch(() => {}), { once: true });
+      const startTone = () => {
+        oscillator.start();
+        oscillator.stop(context.currentTime + 0.12);
+      };
+      if (context.state === 'suspended' &&
+        typeof context.resume === 'function') {
+        void context.resume().then(startTone).catch(() => {
+          context.close?.().catch?.(() => {});
+        });
+      } else {
+        startTone();
+      }
+      oscillator.addEventListener?.('ended', () => {
+        context.close?.().catch?.(() => {});
+      }, { once: true });
     } catch (error) {
       // 浏览器拒绝音频时，文字反馈仍然生效。
     }
@@ -1151,7 +1274,7 @@
     showTemporaryNotice.timer = global.setTimeout(() => {
       notice.classList.remove('feedback');
       renderPageNotice();
-    }, 900);
+    }, 1800);
   }
 
   function blockEvent(event, match) {
@@ -1279,11 +1402,44 @@
     if (global.document.body) processElement(global.document.body);
   }
 
+  async function loadBlockingRules() {
+    const response = await sendMessage({
+      type: 'GET_BLOCKING_RULES',
+    });
+    if (response?.success === true && response.rules) {
+      return response.rules;
+    }
+    if (
+      rulesApi.isUnknownMessageResponse(
+        response,
+        'GET_BLOCKING_RULES'
+      )
+    ) {
+      try {
+        return await rulesApi.getRulesFromStorage();
+      } catch (error) {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  function refreshBlockingRules() {
+    void loadBlockingRules().then((nextRules) => {
+      if (nextRules) applyRules(nextRules);
+    });
+  }
+
   function init() {
     installStyle();
     installObserver();
     if (typeof global.addEventListener === 'function') {
-      for (const eventType of ['click', 'auxclick', 'keydown']) {
+      for (const eventType of [
+        'pointerdown',
+        'click',
+        'auxclick',
+        'keydown',
+      ]) {
         global.addEventListener(eventType, handleInteraction, true);
       }
       global.addEventListener(
@@ -1307,9 +1463,7 @@
       global.addEventListener('message', handleBlockingRuleRequest, false);
       global.addEventListener('message', handleSearchOpenRequest, false);
     }
-    void sendMessage({ type: 'GET_BLOCKING_RULES' }).then((response) => {
-      applyRules(response?.rules || rulesApi.normalizeRules());
-    });
+    refreshBlockingRules();
     void sendMessage({ type: 'GET_SEARCH_SESSION_CONTEXT' }).then(response => {
       navigationContext = response?.enabled ? response : null;
       synchronizeDepthFromPage();
@@ -1327,9 +1481,7 @@
     if (changes[rulesApi.STORAGE_KEYS.KEYWORDS] ||
       changes[rulesApi.STORAGE_KEYS.URL_PATTERNS] ||
       changes[rulesApi.STORAGE_KEYS.HIGH_RISK_DOMAINS]) {
-      void sendMessage({ type: 'GET_BLOCKING_RULES' }).then((response) => {
-        applyRules(response?.rules || rulesApi.normalizeRules());
-      });
+      refreshBlockingRules();
     }
   });
 

@@ -1215,7 +1215,7 @@
 
         const blockingRuleControls = document.createElement('span');
         blockingRuleControls.className = 'blocking-rule-inline-controls';
-        blockingRuleControls.setAttribute('aria-label', '添加阻断规则');
+        blockingRuleControls.setAttribute('aria-label', '阻断');
         blockingRuleControls.innerHTML = `
             <label>
                 <input type="radio" name="blocking-rule-scope" value="keyword" checked>
@@ -1229,7 +1229,7 @@
                 <input type="radio" name="blocking-rule-scope" value="both">
                 关键词和 URL
             </label>
-            <button id="add-blocking-rule" type="button">添加阻断规则</button>
+            <button id="add-blocking-rule" type="button">阻断</button>
             <span id="blocking-rule-status" role="status" aria-live="polite"></span>
         `;
         if (typeof settingsBtn.insertAdjacentElement === 'function') {

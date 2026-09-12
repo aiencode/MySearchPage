@@ -599,6 +599,11 @@ test('main page places the only blocking-rule UI beside settings', () => {
   assert.match(mainPage, /value="url"/);
   assert.match(mainPage, /value="both"/);
   assert.match(mainPage, /id="add-blocking-rule"/);
+  assert.match(
+    mainPage,
+    /<button id="add-blocking-rule" type="button">阻断<\/button>/
+  );
+  assert.doesNotMatch(mainPage, /添加阻断规则/);
   assert.match(mainPage, /const value = searchInput\.value\.trim\(\)/);
   assert.match(mainPage, /type: 'MYSEARCH_BLOCKING_RULE_REQUEST'/);
   assert.match(mainPage, /window\.setTimeout\(\(\) =>/);
@@ -635,6 +640,11 @@ test('extension new tab adds radio rules beside settings using its existing sear
   assert.match(source, /value="url"/);
   assert.match(source, /value="both"/);
   assert.match(source, /id="add-blocking-rule"/);
+  assert.match(
+    source,
+    /<button id=\"add-blocking-rule\" type=\"button\">阻断<\/button>/
+  );
+  assert.doesNotMatch(source, /添加阻断规则/);
   assert.match(source, /const value = searchInput\.value\.trim\(\)/);
   assert.match(source, /type: 'ADD_BLOCKING_RULE'/);
   assert.match(source, /value,\s*scope,/);
@@ -698,10 +708,44 @@ test('controller covers dynamic attributes and navigation boundaries', () => {
   ]) {
     assert.match(controller, new RegExp(`['"]${attribute}['"]`));
   }
-  assert.match(controller, /\['click', 'auxclick', 'keydown'\]/);
+  assert.match(controller, /'pointerdown'/);
+  assert.match(controller, /'click'/);
+  assert.match(controller, /'auxclick'/);
+  assert.match(controller, /'keydown'/);
   assert.match(controller, /DEDUPLICATION_WINDOW_MS = 2000/);
   assert.match(controller, /RECORD_BLOCKING_EVENT/);
   assert.match(controller, /filter: blur\(6px\) grayscale\(1\)/);
+  assert.match(
+    controller,
+    /if \(!allowDeduplicatedAttempt\(match\)\) return timestamp/
+  );
+  assert.match(
+    controller,
+    /const feedbackType = 'warning\+beep\+flash\+image'/
+  );
+  assert.match(controller, /function flashBlockingFeedback/);
+  assert.match(controller, /function showBlockingImageFeedback/);
+  assert.match(controller, /createElement\('img'\)/);
+  assert.match(controller, /data:image\/svg\+xml;charset=utf-8/);
+  assert.match(controller, /image\.classList\.add\('visible'\)/);
+  assert.match(
+    controller,
+    /classList\.add\('mysearch-blocking-feedback-flash'\)/
+  );
+  assert.match(controller, /playBeep\(\)/);
+  assert.match(controller, /警告：内容已阻断/);
+  assert.match(controller, /type: 'feedback'/);
+  assert.match(controller, /function loadBlockingRules/);
+  assert.match(
+    controller,
+    /isUnknownMessageResponse\(\s*response,\s*'GET_BLOCKING_RULES'/
+  );
+  assert.match(controller, /rulesApi\.getRulesFromStorage\(\)/);
+  assert.match(controller, /function refreshBlockingRules/);
+  assert.doesNotMatch(
+    controller,
+    /applyRules\(response\?\.rules \|\| rulesApi\.normalizeRules\(\)\)/
+  );
   assert.match(controller, /typeof global\.Element === 'function'/);
   assert.doesNotMatch(controller, /instanceof Element/);
 
