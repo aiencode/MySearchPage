@@ -13,6 +13,7 @@
   const BLOCKED_ATTR = 'data-mysearch-blocked';
   const BLOCKED_KEYWORD_ATTR = 'data-mysearch-blocked-keyword';
   const NOTICE_ID = 'mysearch-blocking-notice';
+  const FEEDBACK_PAUSE_ID = 'mysearch-blocking-feedback-pause';
   const STYLE_ID = 'mysearch-blocking-style';
   const NAVIGATION_EVENT = 'mysearch-blocking-navigation-attempt';
   const MEDIA_EVENT = 'mysearch-blocking-media-attempt';
@@ -31,10 +32,21 @@
       domains: ['xiaohongshu.com'],
       candidates: [
         '[data-note-id]',
+        '[data-note-id-str]',
+        '.note-item',
+        '[class*="note-item"]',
         'a[href*="/explore/"]',
         'a[href*="/discovery/item/"]',
+        'a[href*="/user/"]',
       ],
       details: [
+        '.note-detail-mask',
+        '.note-detail-container',
+        '.note-detail',
+        '[class*="note-detail-mask"]',
+        '[class*="note-detail-container"]',
+        '[class*="noteDetailMask"]',
+        '[class*="noteDetailContainer"]',
         '.note-detail-mask [data-note-id]',
         '.note-detail[data-note-id]',
       ],
@@ -51,6 +63,7 @@
       candidates: [
         '[data-aweme-id]',
         'a[href*="/video/"]',
+        'a[href*="/user/"]',
       ],
       details: [
         '[data-e2e="feed-active-video"][data-aweme-id]',
@@ -71,6 +84,8 @@
         '[data-bvid]',
         'a[href*="/video/"]',
         'a[href*="/bangumi/play/"]',
+        'a[href*="/space/"]',
+        'a[href*="/channel/"]',
       ],
       details: [],
       cleanup: [
@@ -88,6 +103,11 @@
         'a[href*="/watch?"]',
         'a[href*="/shorts/"]',
         'a[href*="/live/"]',
+        'a[href*="/channel/"]',
+        'a[href*="/@"]',
+        'a[href*="/c/"]',
+        'a[href*="/user/"]',
+        'a[href*="/feed/"]',
       ],
       details: [],
       cleanup: [
@@ -118,6 +138,20 @@
     'h4',
   ].join(',');
   const DEDUPLICATION_WINDOW_MS = 2000;
+  const NEGATIVE_FEEDBACK_ASSETS = Object.freeze([
+    'content/feedback-assets/moldy-fruit.png',
+    'content/feedback-assets/clogged-drain.png',
+    'content/feedback-assets/greasy-pan.png',
+    'content/feedback-assets/dirty-wastewater.png',
+  ]);
+  const FALLBACK_FEEDBACK_IMAGE =
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 220">' +
+    '<rect width="320" height="220" fill="#4f5b52"/>' +
+    '<ellipse cx="160" cy="112" rx="112" ry="64" fill="#26302b"/>' +
+    '<g fill="#b7c58b"><circle cx="92" cy="92" r="21"/><circle cx="135" cy="136" r="16"/><circle cx="194" cy="88" r="18"/><circle cx="225" cy="132" r="13"/></g>' +
+    '<g fill="#71814b"><circle cx="92" cy="92" r="8"/><circle cx="135" cy="136" r="6"/><circle cx="194" cy="88" r="7"/></g>' +
+    '<text x="160" y="201" text-anchor="middle" font-family="Arial,sans-serif" font-size="22" font-weight="700" fill="#fff">已阻断，停止点击</text>' +
+    '</svg>';
 
   let rules = rulesApi.normalizeRules();
   let rulesLoaded = false;
@@ -136,6 +170,11 @@
   let lastAttemptAt = null;
   let navigationContext = null;
   let lastRejectedContentId = '';
+  let syntheticDetailIds = new WeakMap();
+  let syntheticDetailSequence = 0;
+  let feedbackPauseUntil = 0;
+  let feedbackPauseTimer = null;
+  let feedbackPauseInterval = null;
 
   const sessionId = global.crypto?.randomUUID?.() || (
     `page-${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -481,49 +520,130 @@
     const path = url.pathname;
     let value = '';
     if (adapterEntry.name === 'xiaohongshu') {
-      value = path.match(
+      const note = path.match(
         /\/(?:explore|discovery\/item)\/([a-zA-Z0-9]+)/
-      )?.[1] || '';
+      )?.[1];
+      const user = path.match(
+        /\/user\/(?:profile\/)?([^/?#]+)/
+      )?.[1];
+      value = note || (user ? `user:${user}` : '');
     } else if (adapterEntry.name === 'douyin') {
       value = path.match(/\/video\/(\d+)/)?.[1] || '';
+      if (!value) {
+        const user = path.match(/\/(?:user|channel)\/([^/?#]+)/)?.[1];
+        if (user) value = `user:${user}`;
+      }
     } else if (adapterEntry.name === 'bilibili') {
       value = path.match(/\/video\/((?:BV|av)[a-zA-Z0-9]+)/i)?.[1] ||
         path.match(/\/bangumi\/play\/((?:ep|ss)\d+)/i)?.[1] || '';
+      if (!value) {
+        const channel = path.match(/\/(?:space|channel)\/([^/?#]+)/)?.[1];
+        if (channel) value = `channel:${channel}`;
+      }
     } else if (adapterEntry.name === 'youtube') {
       value = url.searchParams.get('v') ||
         path.match(/\/(?:shorts|live)\/([^/?#]+)/)?.[1] ||
         (url.hostname === 'youtu.be'
           ? path.slice(1).split('/')[0]
           : '');
+      if (!value) {
+        const channel = path.match(
+          /\/(?:channel|c|user)\/([^/?#]+)/
+        )?.[1] || path.match(/\/@([^/?#]+)/)?.[1];
+        if (channel) value = `channel:${channel}`;
+      }
+      if (!value && /^\/feed(?:\/|$)/.test(path)) {
+        value = `feed:${path.slice('/feed/'.length) || 'home'}`;
+      }
     }
     return value ? `${adapterEntry.name}:${value}` : '';
+  }
+
+  function isAdapterDomainUrl(rawUrl, adapterEntry = depthAdapterEntry()) {
+    if (!adapterEntry || !rawUrl) return false;
+    let url;
+    try {
+      url = new URL(rawUrl, global.location.href);
+    } catch (error) {
+      return false;
+    }
+    const hostname = url.hostname.toLowerCase().replace(/^www\./, '');
+    return adapterEntry.domains.some(rule =>
+      hostname === rule || hostname.endsWith(`.${rule}`)
+    );
   }
 
   function contentIdFromElement(target) {
     const adapter = depthAdapterEntry();
     if (!adapter || !isElement(target)) return '';
     const selector = adapter.candidates.join(',');
-    const element = target.closest?.(selector) ||
-      target.querySelector?.(selector);
-    if (!element) return '';
+    const elements = [];
+    const addElement = (element) => {
+      if (element && !elements.includes(element)) elements.push(element);
+    };
+    addElement(target.closest?.(selector));
+    addElement(target.matches?.(selector) ? target : null);
+    addElement(target.querySelector?.(selector));
+
+    // 小红书的卡片和详情容器经常把编号放在自定义节点上，点击目标
+    // 本身可能只是图片/文字，因此沿祖先链补一次精确的编号查找。
+    let ancestor = target;
+    for (let depth = 0; ancestor && depth < 12; depth += 1) {
+      addElement(ancestor);
+      const idElement = ancestor.querySelector?.(
+        '[data-note-id], [data-note-id-str], [data-aweme-id], [data-bvid], [data-aid]'
+      );
+      addElement(idElement);
+      ancestor = ancestor.parentElement;
+    }
+
     const attributes = {
-      xiaohongshu: ['data-note-id'],
+      xiaohongshu: ['data-note-id', 'data-note-id-str', 'data-item-id'],
       douyin: ['data-aweme-id'],
       bilibili: ['data-bvid', 'data-aid'],
       youtube: [],
     }[adapter.name];
-    for (const attribute of attributes) {
-      const value = element.getAttribute?.(attribute);
-      if (value) return `${adapter.name}:${value}`;
+    for (const element of elements) {
+      const isXiaohongshuContainer = adapter.name === 'xiaohongshu' &&
+        element.matches?.(
+          '.note-item, [class*="note-item"], .note-detail, ' +
+          '[class*="note-detail-mask"], [class*="note-detail-container"], ' +
+          '[class*="noteDetailMask"], [class*="noteDetailContainer"], ' +
+          '[role="dialog"]'
+        );
+      const elementAttributes = isXiaohongshuContainer
+        ? [...attributes, 'data-id']
+        : attributes;
+      for (const attribute of elementAttributes) {
+        const value = element.getAttribute?.(attribute);
+        if (value) return `${adapter.name}:${value}`;
+      }
     }
-    const href = element.getAttribute?.('href') ||
-      element.querySelector?.('a[href]')?.getAttribute('href') || '';
-    return contentIdFromUrl(href, adapter);
+    for (const element of elements) {
+      const href = element.getAttribute?.('href') ||
+        element.getAttribute?.('data-href') ||
+        element.getAttribute?.('data-url') ||
+        element.querySelector?.('a[href]')?.getAttribute('href') || '';
+      const id = contentIdFromUrl(href, adapter);
+      if (id) return id;
+    }
+    return '';
+  }
+
+  function syntheticDetailContentId(element) {
+    if (!element) return '';
+    const existing = syntheticDetailIds.get(element);
+    if (existing) return existing;
+    syntheticDetailSequence += 1;
+    const id = `xiaohongshu:detail:${sessionId}:${syntheticDetailSequence}`;
+    syntheticDetailIds.set(element, id);
+    return id;
   }
 
   function isSearchResultsUrl(rawUrl) {
     const adapter = depthAdapterEntry();
     if (!adapter) return false;
+    if (!isAdapterDomainUrl(rawUrl, adapter)) return false;
     let url;
     try {
       url = new URL(rawUrl, global.location.href);
@@ -542,6 +662,25 @@
     return adapter.name === 'youtube' && url.pathname === '/results';
   }
 
+  function navigationContentIdFromUrl(rawUrl) {
+    const adapter = depthAdapterEntry();
+    if (!adapter || !rawUrl || !isAdapterDomainUrl(rawUrl, adapter)) {
+      return '';
+    }
+    const contentId = contentIdFromUrl(rawUrl, adapter);
+    if (contentId) return contentId;
+    let url;
+    try {
+      url = new URL(rawUrl, global.location.href);
+    } catch (error) {
+      return '';
+    }
+    if (isSearchResultsUrl(rawUrl)) {
+      return `${adapter.name}:search`;
+    }
+    return `${adapter.name}:route:${url.pathname}${url.search}`;
+  }
+
   function currentPageContentId() {
     const adapter = depthAdapterEntry();
     if (!adapter) return '';
@@ -553,6 +692,25 @@
         if (element.hasAttribute?.(DEPTH3_REJECTED_ATTR)) continue;
         const id = contentIdFromElement(element);
         if (id) return id;
+        if (adapter.name === 'xiaohongshu') {
+          return syntheticDetailContentId(element);
+        }
+      }
+    }
+    // 某些 SPA 详情没有固定的详情类名，但会把当前笔记编号挂在
+    // note-detail 相关后代节点上；这里仍只查详情容器，不扫描整个页面。
+    if (adapter.name === 'xiaohongshu') {
+      const detailRoots = Array.from(
+        global.document?.querySelectorAll?.(
+          '[class*="note-detail-mask"], [class*="note-detail-container"], ' +
+          '[class*="noteDetailMask"], [class*="noteDetailContainer"], ' +
+          '[role="dialog"][data-note-id], [aria-modal="true"][data-note-id]'
+        ) || []
+      );
+      for (const element of detailRoots.reverse()) {
+        const id = contentIdFromElement(element);
+        if (id) return id;
+        return syntheticDetailContentId(element);
       }
     }
     return contentIdFromUrl(global.location.href, adapter);
@@ -725,9 +883,8 @@
     );
     const currentUrl = normalizeNavigationUrl(global.location.href);
     const adapter = depthAdapterEntry();
-    const currentUrlContentId = contentIdFromUrl(
-      global.location.href,
-      adapter
+    const currentUrlContentId = navigationContentIdFromUrl(
+      global.location.href
     );
     if (
       shouldRestoreCommittedDepth3Url(
@@ -777,7 +934,9 @@
 
   function handleDepthInteraction(event) {
     if (!navigationContext?.enabled || !depthAdapterEntry()) return false;
-    const contentId = contentIdFromElement(event.target);
+    const targetUrl = interactionTargetUrl(event.target);
+    const contentId = contentIdFromElement(event.target) ||
+      navigationContentIdFromUrl(targetUrl);
     if (!contentId) return false;
     const blocked = depth3Match(contentId);
     if (blocked) {
@@ -798,6 +957,18 @@
       return;
     }
     const contentId = currentPageContentId();
+    if (
+      navigationContext.depth === 2 &&
+      isSearchResultsUrl(global.location.href)
+    ) {
+      updateNavigationContext(1, '', {
+        contentUrl: '',
+        pendingDepth: 1,
+        pendingContentId: '',
+        pendingContentUrl: '',
+      });
+      return;
+    }
     if (contentId) {
       if (navigationContext.depth === 1) {
         markAllowedContentNavigation(
@@ -816,16 +987,16 @@
       applyDepth2Cleanup();
       return;
     }
-    if (
-      navigationContext.depth === 2 &&
-      isSearchResultsUrl(global.location.href)
-    ) {
-      updateNavigationContext(1, '', {
-        contentUrl: '',
-        pendingDepth: 1,
-        pendingContentId: '',
-        pendingContentUrl: '',
-      });
+    if (navigationContext.depth === 2) {
+      const routeContentId = navigationContentIdFromUrl(
+        global.location.href
+      );
+      const blocked = depth3Match(routeContentId);
+      if (blocked) {
+        rejectCommittedDepth3(routeContentId);
+        return;
+      }
+      applyDepth2Cleanup();
       return;
     }
     applyDepth2Cleanup();
@@ -938,6 +1109,12 @@
     return target && typeof target.appendChild === 'function' ? target : null;
   }
 
+  function visibleDocumentAppendTarget() {
+    const target = global.document?.body ||
+      global.document?.documentElement;
+    return target && typeof target.appendChild === 'function' ? target : null;
+  }
+
   function installStyle() {
     if (!canCreateDocumentNodes()) return;
     if (global.document.getElementById(STYLE_ID)) return;
@@ -979,6 +1156,27 @@
         font: bold 16px/1.35 Arial, sans-serif !important;
         box-shadow: 0 4px 18px rgba(0, 0, 0, 0.38) !important;
       }
+      #${FEEDBACK_PAUSE_ID} {
+        position: fixed !important;
+        inset: 0 !important;
+        z-index: 2147483646 !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        box-sizing: border-box !important;
+        padding: 24px !important;
+        background: rgba(18, 18, 18, 0.94) !important;
+        color: #fff !important;
+        font: bold clamp(20px, 4vw, 38px)/1.35 Arial, sans-serif !important;
+        text-align: center !important;
+        white-space: pre-line !important;
+        cursor: not-allowed !important;
+        user-select: none !important;
+        pointer-events: auto !important;
+      }
+      #${FEEDBACK_PAUSE_ID}[hidden] {
+        display: none !important;
+      }
       html.mysearch-blocking-grayout {
         filter: grayscale(0.85) !important;
       }
@@ -1006,15 +1204,16 @@
       }
       #mysearch-blocking-feedback-image {
         position: fixed !important;
+        display: block !important;
         top: 50% !important;
         left: 50% !important;
         z-index: 2147483647 !important;
-        width: min(42vw, 220px) !important;
+        width: min(72vw, 520px) !important;
         height: auto !important;
         margin: 0 !important;
         padding: 0 !important;
         border: 0 !important;
-        border-radius: 22px !important;
+        border-radius: 12px !important;
         background: transparent !important;
         box-shadow: 0 8px 28px rgba(0, 0, 0, 0.42) !important;
         opacity: 0 !important;
@@ -1048,7 +1247,7 @@
     installStyle();
     let notice = global.document.getElementById(NOTICE_ID);
     if (!notice) {
-      const target = documentAppendTarget();
+      const target = visibleDocumentAppendTarget();
       if (!target) return;
       notice = global.document.createElement('div');
       notice.id = NOTICE_ID;
@@ -1134,14 +1333,16 @@
   function showFeedback(match, timestamp) {
     const current = timestamp || now();
     showTemporaryNotice(
-      `警告：内容已阻断，本次尝试已记录（第 ${blockedClickCount} 次）。`
+      `内容已阻断。本次冲动点击已记录（第 ${blockedClickCount} 次）。\n` +
+      '冲动不是命令。停一下，识别它，然后回到原来的任务。'
     );
     flashBlockingFeedback();
-    showBlockingImageFeedback();
+    showBehaviorPauseFeedback();
+    const feedbackImageAsset = showBlockingImageFeedback();
 
     if (current - lastFeedbackAt < 300) return;
 
-    const feedbackType = 'warning+beep+flash+image';
+    const feedbackType = 'aversive+pause+beep+photo';
     const interval = lastAttemptAt == null ? null : current - lastAttemptAt;
     if (lastFeedbackEventId && interval != null) {
       void sendMessage({
@@ -1160,6 +1361,10 @@
         id: lastFeedbackEventId,
         type: 'feedback',
         feedbackType,
+        feedbackImageAsset,
+        pauseDurationMs: 5000,
+        soundProfile: 'short-high-frequency-safe',
+        trainingPrompt: '识别冲动，不执行，回到原任务',
         keyword: match.kind === 'keyword' ? match.value : '',
         urlPattern: match.kind === 'url' ? match.value : '',
         timestamp: current,
@@ -1183,9 +1388,9 @@
   }
 
   function showBlockingImageFeedback() {
-    if (!canCreateDocumentNodes()) return;
-    const target = documentAppendTarget();
-    if (!target) return;
+    if (!canCreateDocumentNodes()) return '';
+    const target = visibleDocumentAppendTarget();
+    if (!target) return '';
 
     let image = global.document.getElementById(
       'mysearch-blocking-feedback-image'
@@ -1193,32 +1398,43 @@
     if (!image) {
       image = global.document.createElement('img');
       image.id = 'mysearch-blocking-feedback-image';
-      image.alt = '停止：内容已阻断';
+      image.alt = '厌恶反馈：内容已阻断';
       image.setAttribute('aria-hidden', 'true');
-      image.src =
-        'data:image/svg+xml;charset=utf-8,' +
-        encodeURIComponent(
-          '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240">' +
-          '<rect width="240" height="240" rx="24" fill="#fff"/>' +
-          '<path d="M78 18h84l60 60v84l-60 60H78l-60-60V78z" ' +
-          'fill="#c62828" stroke="#700000" stroke-width="8"/>' +
-          '<rect x="58" y="96" width="124" height="48" rx="12" fill="#fff"/>' +
-          '<text x="120" y="129" text-anchor="middle" ' +
-          'font-family="Arial,sans-serif" font-size="28" font-weight="700" ' +
-          'fill="#900000">STOP</text>' +
-          '<text x="120" y="184" text-anchor="middle" ' +
-          'font-family="sans-serif" font-size="22" font-weight="700" ' +
-          'fill="#fff">已阻断</text>' +
-          '</svg>'
-        );
       target.appendChild(image);
     }
 
-    image.classList.add('visible');
-    global.clearTimeout(showBlockingImageFeedback.timer);
-    showBlockingImageFeedback.timer = global.setTimeout(() => {
-      image.classList.remove('visible');
-    }, 1200);
+    const feedbackImage = NEGATIVE_FEEDBACK_ASSETS[
+      Math.floor(Math.random() * NEGATIVE_FEEDBACK_ASSETS.length)
+    ];
+    let imageUrl = '';
+    try {
+      imageUrl = global.chrome?.runtime?.getURL?.(feedbackImage) || '';
+    } catch (error) {
+      imageUrl = '';
+    }
+    const fallbackImageUrl =
+      'data:image/svg+xml;charset=utf-8,' +
+      encodeURIComponent(FALLBACK_FEEDBACK_IMAGE);
+
+    const revealImage = () => {
+      target.appendChild(image);
+      image.classList.add('visible');
+      global.clearTimeout(showBlockingImageFeedback.timer);
+      showBlockingImageFeedback.timer = global.setTimeout(() => {
+        image.classList.remove('visible');
+      }, 5000);
+    };
+
+    image.onload = revealImage;
+    image.onerror = () => {
+      image.onerror = null;
+      image.src = fallbackImageUrl;
+    };
+    image.src = imageUrl || fallbackImageUrl;
+    if (image.complete && image.naturalWidth > 0) {
+      revealImage();
+    }
+    return feedbackImage;
   }
 
   function playBeep() {
@@ -1229,16 +1445,21 @@
       const oscillator = context.createOscillator();
       const gain = context.createGain();
       oscillator.type = 'square';
-      oscillator.frequency.value = 220;
-      gain.gain.setValueAtTime(0.035, context.currentTime);
+      // 这是短促、低音量的高频提示，不把系统音量推到危险范围。
+      oscillator.frequency.setValueAtTime(2800, context.currentTime);
+      oscillator.frequency.exponentialRampToValueAtTime(
+        1800,
+        context.currentTime + 0.12
+      );
+      gain.gain.setValueAtTime(0.03, context.currentTime);
       gain.gain.exponentialRampToValueAtTime(
         0.001,
-        context.currentTime + 0.12
+        context.currentTime + 0.14
       );
       oscillator.connect(gain).connect(context.destination);
       const startTone = () => {
         oscillator.start();
-        oscillator.stop(context.currentTime + 0.12);
+        oscillator.stop(context.currentTime + 0.14);
       };
       if (context.state === 'suspended' &&
         typeof context.resume === 'function') {
@@ -1261,7 +1482,7 @@
     installStyle();
     let notice = global.document.getElementById(NOTICE_ID);
     if (!notice) {
-      const target = documentAppendTarget();
+      const target = visibleDocumentAppendTarget();
       if (!target) return;
       notice = global.document.createElement('div');
       notice.id = NOTICE_ID;
@@ -1277,6 +1498,70 @@
     }, 1800);
   }
 
+  function finishFeedbackPause() {
+    feedbackPauseUntil = 0;
+    if (feedbackPauseTimer != null) {
+      global.clearTimeout(feedbackPauseTimer);
+      feedbackPauseTimer = null;
+    }
+    if (feedbackPauseInterval != null) {
+      global.clearInterval(feedbackPauseInterval);
+      feedbackPauseInterval = null;
+    }
+    const pause = global.document?.getElementById?.(FEEDBACK_PAUSE_ID);
+    if (pause) {
+      pause.hidden = true;
+      pause.setAttribute('aria-hidden', 'true');
+    }
+  }
+
+  function showBehaviorPauseFeedback() {
+    if (!canCreateDocumentNodes()) return;
+    installStyle();
+    const target = visibleDocumentAppendTarget();
+    if (!target) return;
+    let pause = global.document.getElementById(FEEDBACK_PAUSE_ID);
+    if (!pause) {
+      pause = global.document.createElement('div');
+      pause.id = FEEDBACK_PAUSE_ID;
+      pause.setAttribute('role', 'alert');
+      pause.setAttribute('aria-live', 'assertive');
+      pause.setAttribute('aria-hidden', 'false');
+      pause.tabIndex = -1;
+      target.appendChild(pause);
+    }
+    const duration = 5000;
+    feedbackPauseUntil = now() + duration;
+    pause.hidden = false;
+    pause.setAttribute('aria-hidden', 'false');
+    const render = () => {
+      const remaining = Math.max(0, feedbackPauseUntil - now());
+      const seconds = Math.ceil(remaining / 1000);
+      pause.textContent = seconds > 0
+        ? `先停 ${seconds} 秒\n内容不会打开，点击已记录。`
+        : '可以继续工作。';
+    };
+    render();
+    if (feedbackPauseTimer != null) global.clearTimeout(feedbackPauseTimer);
+    if (feedbackPauseInterval != null) {
+      global.clearInterval(feedbackPauseInterval);
+    }
+    feedbackPauseInterval = global.setInterval(render, 250);
+    feedbackPauseTimer = global.setTimeout(finishFeedbackPause, duration);
+  }
+
+  function blockDuringFeedbackPause(event) {
+    if (!feedbackPauseUntil) return false;
+    if (now() >= feedbackPauseUntil) {
+      finishFeedbackPause();
+      return false;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+    return true;
+  }
+
   function blockEvent(event, match) {
     if (!match) return;
     event.preventDefault();
@@ -1287,6 +1572,7 @@
   }
 
   function handleInteraction(event) {
+    if (blockDuringFeedbackPause(event)) return;
     if (event.type === 'keydown' && !['Enter', ' ', 'Spacebar'].includes(event.key)) return;
     if (handleDepthInteraction(event)) return;
     const match = getInteractionMatch(event.target);
@@ -1294,8 +1580,11 @@
   }
 
   function handlePageNavigation(event) {
+    if (blockDuringFeedbackPause(event)) return;
     if (navigationContext?.enabled && depthAdapterEntry()) {
-      const contentId = contentIdFromUrl(event.detail?.url || '');
+      const contentId = navigationContentIdFromUrl(
+        event.detail?.url || ''
+      );
       const blocked = depth3Match(contentId);
       if (blocked) {
         blockDepth3(event, blocked);
@@ -1317,6 +1606,7 @@
   }
 
   function handleMediaAttempt(event) {
+    if (blockDuringFeedbackPause(event)) return;
     if (navigationContext?.enabled && depthAdapterEntry()) {
       const contentId = currentPageContentId();
       const blocked = depth3Match(contentId);

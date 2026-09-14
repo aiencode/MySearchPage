@@ -99,6 +99,10 @@
   ],
   "web_accessible_resources": [
     {
+      "resources": ["content/feedback-assets/*.png"],
+      "matches": ["<all_urls>"]
+    },
+    {
       "resources": ["content/styles/bilibili-mobile.css"],
       "matches": ["*://*.bilibili.com/*"]
     },

@@ -71,6 +71,10 @@ test('manifest loads blocking modules and preserves media controller', () => {
   assert.ok(manifest.content_scripts.some(entry =>
     entry.js?.includes('content/search-media-controller.js')
   ));
+  assert.ok(manifest.web_accessible_resources.some(entry =>
+    entry.resources?.includes('content/feedback-assets/*.png') &&
+    entry.matches?.includes('<all_urls>')
+  ));
 });
 
 test('three rule collections remain independent and append-only', () => {
@@ -545,6 +549,81 @@ test('Douyin adapter blocks a keyword matched on the complete result card', () =
   );
 });
 
+test('Xiaohongshu content IDs are found from SPA cards and detail links', () => {
+  const contentIdFromElement = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'contentIdFromElement',
+    {
+      depthAdapterEntry() {
+        return {
+          name: 'xiaohongshu',
+          candidates: [
+            '[data-note-id]',
+            '[data-note-id-str]',
+            '.note-item',
+            '[class*="note-item"]',
+            'a[href*="/explore/"]',
+            'a[href*="/discovery/item/"]',
+            'a[href*="/user/"]',
+          ],
+        };
+      },
+      isElement(value) {
+        return value?.kind === 'element';
+      },
+      contentIdFromUrl(rawUrl, adapter) {
+        const match = String(rawUrl).match(
+          /\/(?:explore|discovery\/item)\/([a-zA-Z0-9]+)/
+        );
+        return match ? `${adapter.name}:${match[1]}` : '';
+      },
+    }
+  );
+  const card = {
+    kind: 'element',
+    parentElement: null,
+    getAttribute(name) {
+      return name === 'data-id' ? 'spa-note-42' : '';
+    },
+    matches(selector) {
+      return selector.includes('.note-item');
+    },
+    closest() {
+      return this;
+    },
+    querySelector() {
+      return null;
+    },
+  };
+  assert.equal(
+    contentIdFromElement(card),
+    'xiaohongshu:spa-note-42'
+  );
+
+  const link = {
+    kind: 'element',
+    parentElement: null,
+    getAttribute(name) {
+      return name === 'href'
+        ? '/explore/detail99'
+        : '';
+    },
+    matches(selector) {
+      return selector.includes('a[href*="/explore/"]');
+    },
+    closest() {
+      return this;
+    },
+    querySelector() {
+      return null;
+    },
+  };
+  assert.equal(
+    contentIdFromElement(link),
+    'xiaohongshu:detail99'
+  );
+});
+
 test('policy dashboard and old-tab takeover remain in the existing extension', () => {
   const manifest = JSON.parse(read('extension/manifest.json'));
   const policy = JSON.parse(
@@ -721,19 +800,53 @@ test('controller covers dynamic attributes and navigation boundaries', () => {
   );
   assert.match(
     controller,
-    /const feedbackType = 'warning\+beep\+flash\+image'/
+    /const feedbackType = 'aversive\+pause\+beep\+photo'/
   );
   assert.match(controller, /function flashBlockingFeedback/);
   assert.match(controller, /function showBlockingImageFeedback/);
+  assert.match(
+    controller,
+    /function visibleDocumentAppendTarget\(\) \{\s*const target = global\.document\?\.body \|\|\s*global\.document\?\.documentElement/
+  );
+  assert.equal(
+    (
+      controller.match(
+        /const target = visibleDocumentAppendTarget\(\);/g
+      ) || []
+    ).length,
+    4
+  );
+  assert.equal(
+    (
+      controller.match(
+        /const target = documentAppendTarget\(\);/g
+      ) || []
+    ).length,
+    1
+  );
   assert.match(controller, /createElement\('img'\)/);
+  assert.match(controller, /global\.chrome\?\.runtime\?\.getURL\?\./);
   assert.match(controller, /data:image\/svg\+xml;charset=utf-8/);
+  assert.match(controller, /const fallbackImageUrl =/);
+  assert.match(controller, /image\.onload = revealImage/);
+  assert.match(controller, /image\.onerror = \(\) =>/);
+  assert.match(
+    controller,
+    /target\.appendChild\(image\);\s*image\.classList\.add\('visible'\)/
+  );
+  assert.match(
+    controller,
+    /showBehaviorPauseFeedback\(\);\s*const feedbackImageAsset = showBlockingImageFeedback\(\)/
+  );
+  assert.match(controller, /display: block !important/);
   assert.match(controller, /image\.classList\.add\('visible'\)/);
   assert.match(
     controller,
     /classList\.add\('mysearch-blocking-feedback-flash'\)/
   );
   assert.match(controller, /playBeep\(\)/);
-  assert.match(controller, /警告：内容已阻断/);
+  assert.match(controller, /内容已阻断。本次冲动点击已记录/);
+  assert.match(controller, /冲动不是命令。停一下，识别它，然后回到原来的任务/);
   assert.match(controller, /type: 'feedback'/);
   assert.match(controller, /function loadBlockingRules/);
   assert.match(
@@ -785,9 +898,30 @@ test('high-risk navigation has persistent sessions and explicit adapters only', 
 
   assert.match(controller, /const DEPTH_ADAPTERS =/);
   assert.match(controller, /data-note-id/);
+  assert.match(controller, /data-note-id-str/);
+  assert.match(controller, /\.note-item/);
+  assert.match(controller, /\.note-detail-mask/);
+  assert.match(controller, /\[class\*="noteDetailMask"\]/);
   assert.match(controller, /data-aweme-id/);
   assert.match(controller, /data-bvid/);
   assert.match(controller, /a\[href\*="\/watch\?"\]/);
+  assert.match(controller, /NEGATIVE_FEEDBACK_ASSETS/);
+  for (const asset of [
+    'moldy-fruit.png',
+    'clogged-drain.png',
+    'greasy-pan.png',
+    'dirty-wastewater.png',
+  ]) {
+    assert.match(controller, new RegExp(asset.replace('.', '\\.') + "'")
+    );
+  }
+  assert.match(controller, /oscillator\.frequency\.setValueAtTime\(2800/);
+  assert.match(controller, /context\.currentTime \+ 0\.14/);
+  assert.match(controller, /function showBehaviorPauseFeedback/);
+  assert.match(controller, /先停 \$\{seconds\} 秒/);
+  assert.match(controller, /pauseDurationMs: 5000/);
+  assert.match(controller, /soundProfile: 'short-high-frequency-safe'/);
+  assert.match(controller, /trainingPrompt: '识别冲动，不执行，回到原任务'/);
   assert.match(controller, /function depth3Match/);
   const isDepth3 = loadNamedFunction(
     'extension/content/blocking-controller.js',
