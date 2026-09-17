@@ -1,0 +1,127 @@
+/*
+ * JS 会从 DOM 整体移除原生搜索 owner。
+ * 本文件负责 JS 执行前及 MutationObserver 回调前的 fail-closed 防闪现。
+ */
+
+html[data-msp-native-search-active="douyin.com"]
+  input[data-e2e="searchbar-input"],
+html[data-msp-native-search-active="douyin.com"]
+  [data-e2e="searchbar-button"],
+html[data-msp-native-search-active="douyin.com"]
+  [data-e2e="searchbar-container"],
+html[data-msp-native-search-active="douyin.com"]
+  [data-e2e="searchbar"],
+html[data-msp-native-search-active="douyin.com"]
+  [data-e2e="search-box"] {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+html[data-msp-native-search-active="douyin.com"]
+  [data-e2e*="search-history"],
+html[data-msp-native-search-active="douyin.com"]
+  [data-e2e*="search-suggest"],
+html[data-msp-native-search-active="douyin.com"]
+  [data-e2e*="search-hot"],
+html[data-msp-native-search-active="douyin.com"]
+  [data-e2e*="search-trend"],
+html[data-msp-native-search-active="douyin.com"]
+  [data-e2e*="search-recommend"],
+html[data-msp-native-search-active="douyin.com"]
+  [data-e2e*="search"] [class*="history"],
+html[data-msp-native-search-active="douyin.com"]
+  [data-e2e*="search"] [class*="suggest"],
+html[data-msp-native-search-active="douyin.com"]
+  [data-e2e*="search"] [class*="hot"],
+html[data-msp-native-search-active="douyin.com"]
+  [data-e2e*="search"] [class*="trend"],
+html[data-msp-native-search-active="douyin.com"]
+  [class*="search-history"],
+html[data-msp-native-search-active="douyin.com"]
+  [class*="search-suggest"],
+html[data-msp-native-search-active="douyin.com"]
+  [class*="search-hot"],
+html[data-msp-native-search-active="douyin.com"]
+  [class*="search-trend"],
+html[data-msp-native-search-active="douyin.com"]
+  [class*="search-recommend"],
+html[data-msp-native-search-active="douyin.com"]
+  [class*="search-panel"],
+html[data-msp-native-search-active="douyin.com"]
+  [class*="search-popover"],
+html[data-msp-native-search-active="douyin.com"]
+  [class*="search-dropdown"] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
+html[data-msp-native-search-active="bilibili.com"]
+  .center-search-container,
+html[data-msp-native-search-active="bilibili.com"]
+  .bili-header__search,
+html[data-msp-native-search-active="bilibili.com"]
+  .nav-search-box,
+html[data-msp-native-search-active="youtube.com"]
+  ytd-searchbox,
+html[data-msp-native-search-active="youtube.com"]
+  ytm-searchbox,
+html[data-msp-native-search-active="xiaohongshu.com"]
+  [data-testid="search-bar"],
+html[data-msp-native-search-active="xiaohongshu.com"]
+  [data-testid="searchbox"] {
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+[data-msp-native-search-root="true"] {
+  box-sizing: border-box !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: auto !important;
+  min-width: 104px !important;
+  min-height: 36px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+[data-msp-native-search-button="true"] {
+  box-sizing: border-box !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-width: 104px !important;
+  min-height: 36px !important;
+  padding: 1px 6px !important;
+  border: 1px solid #000 !important;
+  border-radius: 2px !important;
+  background: #fff !important;
+  color: #000 !important;
+  cursor: pointer !important;
+  font-size: 16px !important;
+  font-weight: 600 !important;
+  line-height: 1.2 !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+@media (max-width: 768px) {
+  [data-msp-native-search-root="true"],
+  [data-msp-native-search-button="true"] {
+    min-width: 88px !important;
+    min-height: 30px !important;
+  }
+
+  [data-msp-native-search-button="true"] {
+    padding: 0 2px !important;
+    font-size: 12px !important;
+  }
+}

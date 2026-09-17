@@ -1137,6 +1137,50 @@
                 lastInputValue = searchInput.value;
             }
         }
+
+        const MYSEARCH_FOCUS_HASH = '#msp-focus-search';
+        let pendingMySearchFocus = false;
+
+        function handleMySearchFocusHash() {
+            if (window.location.hash !== MYSEARCH_FOCUS_HASH) {
+                return false;
+            }
+
+            if (document.hidden) {
+                pendingMySearchFocus = true;
+                return true;
+            }
+
+            pendingMySearchFocus = false;
+            if (searchInput) {
+                searchInput.value = '';
+                lastInputValue = '';
+                lastCursorPosition = 0;
+                enhancedFocusSearchInput(false);
+            }
+
+            try {
+                window.history.replaceState(
+                    null,
+                    document.title,
+                    window.location.pathname + window.location.search
+                );
+            } catch (error) {
+                console.warn('清理 MySearchPage 聚焦标记失败:', error);
+            }
+
+            return true;
+        }
+
+        window.addEventListener(
+            'hashchange',
+            handleMySearchFocusHash
+        );
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden && pendingMySearchFocus) {
+                handleMySearchFocusHash();
+            }
+        });
         
         // 智能搜索框定位函数 - 不仅定位到搜索框，还保持光标位置
         function smartFocusSearchInput() {
@@ -3676,18 +3720,6 @@
             }
         }
 
-        // 输入框输入事件处理
-        function handleInput() {
-            if (!isEditMode) {
-                const keyword = searchInput.value.trim();
-                if (keyword) {
-                    const matchedHistory = searchHistory.filter(item => item.includes(keyword));
-                    if (matchedHistory.length > 0) {
-        
-                    }
-                }
-            }
-        }
         // 显示所有历史项
         function clearSelection() {
             selectedElements.forEach(el => {
@@ -4391,6 +4423,9 @@
                 
                 // 初始化增强的搜索框功能
                 initializeSearchInputEnhancements();
+
+                // 从高风险平台的自绘入口打开时，清空并聚焦自有搜索框。
+                handleMySearchFocusHash();
                 
                 // 确保UI更新
                 // adjustScrollableArea();

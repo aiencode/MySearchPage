@@ -1,0 +1,216 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+
+const redirect = require(
+  '../extension/content/native-search-redirect.js'
+);
+const controllerSource = fs.readFileSync(
+  path.resolve(
+    __dirname,
+    '../extension/content/native-search-redirect.js'
+  ),
+  'utf8'
+);
+
+test('Douyin 使用 input 与原生 submit 的最窄共同 owner', () => {
+  const submit = {};
+  const outer = {
+    parentElement: null,
+    querySelector(selector) {
+      return selector === '[data-e2e="searchbar-button"]'
+        ? submit
+        : null;
+    },
+  };
+  const inner = {
+    parentElement: outer,
+    querySelector() {
+      return null;
+    },
+  };
+  const input = {
+    parentElement: inner,
+  };
+  const site = redirect.getTargetSite(
+    'www.douyin.com',
+    ['douyin.com']
+  );
+
+  assert.equal(
+    redirect.findDouyinSearchOwner(input, site),
+    outer
+  );
+});
+
+test('Douyin 没有原生 submit 时不退化为只替换 input', () => {
+  const parent = {
+    parentElement: null,
+    querySelector() {
+      return null;
+    },
+  };
+  const input = { parentElement: parent };
+  const site = redirect.getTargetSite(
+    'www.douyin.com',
+    ['douyin.com']
+  );
+
+  assert.equal(
+    redirect.findDouyinSearchOwner(input, site),
+    null
+  );
+});
+
+test('Douyin SPA 将自绘入口包回原生 owner 时会重新提升入口', () => {
+  const host = {
+    child: null,
+    replaceChild(next, previous) {
+      assert.equal(previous, owner);
+      this.child = next;
+      next.parentNode = this;
+      previous.parentNode = null;
+    },
+  };
+  const holder = {
+    child: null,
+    removeChild(child) {
+      assert.equal(child, replacementRoot);
+      this.child = null;
+      child.parentNode = null;
+    },
+  };
+  const replacementRoot = {
+    parentNode: holder,
+  };
+  holder.child = replacementRoot;
+
+  const owner = {
+    parentNode: host,
+    contains(node) {
+      return node === replacementRoot;
+    },
+  };
+  host.child = owner;
+
+  assert.equal(
+    redirect.hoistReplacementOutOfOwner(
+      owner,
+      replacementRoot
+    ),
+    true
+  );
+  assert.equal(host.child, replacementRoot);
+  assert.equal(replacementRoot.parentNode, host);
+  assert.equal(owner.parentNode, null);
+});
+
+test('动态 class 浮层只在搜索入口附近且具有诱因文字时命中', () => {
+  const replacementRoot = {
+    contains() { return false; },
+    getBoundingClientRect() {
+      return {
+        left: 100,
+        right: 204,
+        top: 20,
+        bottom: 56,
+      };
+    },
+  };
+  const popup = {
+    textContent: '猜你想搜',
+    className: 'random-runtime-class',
+    style: {},
+    contains() { return false; },
+    getAttribute() { return null; },
+    getBoundingClientRect() {
+      return {
+        left: 90,
+        right: 350,
+        top: 56,
+        bottom: 300,
+      };
+    },
+  };
+  const staticArticle = {
+    ...popup,
+    className: 'article-panel',
+    textContent: '文章讨论热榜',
+  };
+  const windowRef = {
+    getComputedStyle(element) {
+      return {
+        position: element === popup
+          ? 'absolute'
+          : 'sticky',
+      };
+    },
+  };
+
+  assert.equal(
+    redirect.isLikelyDynamicSearchPopup(
+      popup,
+      replacementRoot,
+      windowRef
+    ),
+    true
+  );
+  assert.equal(
+    redirect.isLikelyDynamicSearchPopup(
+      staticArticle,
+      replacementRoot,
+      windowRef
+    ),
+    false
+  );
+});
+
+test('随机 class 浮层覆盖初始 DOM、文本变化和低成本定时跟踪', () => {
+  assert.match(
+    controllerSource,
+    /purgeDynamicPopupSubtree\(documentRef\);/
+  );
+  assert.match(
+    controllerSource,
+    /function purgeTrackedDynamicPopups\(\)/
+  );
+  assert.match(
+    controllerSource,
+    /mutation\.type === 'characterData'/
+  );
+  assert.match(
+    controllerSource,
+    /characterData:\s*true/
+  );
+  assert.match(
+    controllerSource,
+    /DOMContentLoaded[\s\S]*?installObserver\(\)[\s\S]*?scan\(documentRef\)/
+  );
+});
+
+test('Douyin 覆盖历史、猜你想搜、热点与热榜弹层证据', () => {
+  const site = redirect.getTargetSite(
+    'www.douyin.com',
+    ['douyin.com']
+  );
+  const selectors = site.popupSelectors.join('\n');
+
+  assert.match(selectors, /history/);
+  assert.match(selectors, /suggest/);
+  assert.match(selectors, /hot/);
+  assert.match(selectors, /trend/);
+});
+
+test('自绘入口文案只保留一个搜索入口', () => {
+  assert.equal(redirect.BUTTON_TEXT, '搜索资料');
+  assert.equal(
+    redirect.getTargetSite(
+      'www.example.com',
+      ['douyin.com']
+    ),
+    null
+  );
+});

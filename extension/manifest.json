@@ -52,7 +52,23 @@
       "matches": ["<all_urls>"],
       "js": ["content/blocking-page-hook.js"],
       "run_at": "document_start",
-      "world": "MAIN"
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/native-search-redirect.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "*://*.bilibili.com/*",
+        "*://*.douyin.com/*",
+        "*://*.youtube.com/*",
+        "*://*.xiaohongshu.com/*"
+      ],
+      "css": ["content/styles/native-search-redirect.css"],
+      "run_at": "document_start"
     },
     {
       "matches": ["<all_urls>"],
@@ -60,7 +76,8 @@
         "shared/blocking-rules.js",
         "content/blocking-controller.js"
       ],
-      "run_at": "document_start"
+      "run_at": "document_start",
+      "all_frames": true
     },
     {
       "matches": [

@@ -45,6 +45,37 @@ function read(relativePath) {
   return fs.readFileSync(path.join(ROOT, relativePath), 'utf8');
 }
 
+test('navigation keeps one input handler for object history and focused search entry', () => {
+  const source = read('extension/navigation/navigation.js');
+  const handleInputDeclarations = source.match(
+    /function\s+handleInput\s*\(/g
+  ) || [];
+
+  assert.equal(
+    handleInputDeclarations.length,
+    1,
+    '主搜索框只能声明一个 handleInput，避免旧函数覆盖正式处理器'
+  );
+
+  assert.doesNotMatch(
+    source,
+    /searchHistory\.filter\s*\(\s*item\s*=>\s*item\.includes\s*\(/,
+    'searchHistory 已是对象数组，不能再对历史项直接调用 includes'
+  );
+
+  assert.match(
+    source,
+    /searchInput\.addEventListener\(\s*['"]input['"]\s*,\s*handleInput\s*\)/,
+    '唯一的 handleInput 必须继续绑定主搜索框 input 事件'
+  );
+
+  assert.match(
+    source,
+    /function handleMySearchFocusHash\(\)[\s\S]*?searchInput\.value = ''[\s\S]*?enhancedFocusSearchInput\(false\)/,
+    '自绘入口打开 MySearchPage 后必须清空并聚焦主搜索框'
+  );
+});
+
 function exists(relativePath) {
   return fs.existsSync(path.join(ROOT, relativePath));
 }
