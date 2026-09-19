@@ -27,8 +27,6 @@
 
     // 需要隐藏的元素
     hide: [
-      // 顶部导航栏（桌面版特有的大导航）
-      '.bili-header__bar',
       // 右侧推荐/热门栏
       '[class*="right-section"]',
       '[class*="right-container"]',

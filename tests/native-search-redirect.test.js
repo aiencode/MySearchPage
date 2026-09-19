@@ -6,12 +6,19 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const redirect = require(
-  '../extension/content/native-search-redirect.js'
+  '../extension/content/native-search-redirect-runtime.js'
 );
 const controllerSource = fs.readFileSync(
   path.resolve(
     __dirname,
-    '../extension/content/native-search-redirect.js'
+    '../extension/content/native-search-redirect-runtime.js'
+  ),
+  'utf8'
+);
+const redirectCss = fs.readFileSync(
+  path.resolve(
+    __dirname,
+    '../extension/content/styles/native-search-redirect.css'
   ),
   'utf8'
 );
@@ -62,6 +69,185 @@ test('Douyin 没有原生 submit 时不退化为只替换 input', () => {
   assert.equal(
     redirect.findDouyinSearchOwner(input, site),
     null
+  );
+});
+
+test('Douyin 提升到完整视觉 shell，但不会吞掉无关顶部控件', () => {
+  const selectorParts = selector =>
+    String(selector || '')
+      .split(',')
+      .map(item => item.trim());
+
+  const input = {
+    parentElement: null,
+    textContent: '',
+    getAttribute(name) {
+      return name === 'data-e2e'
+        ? 'searchbar-input'
+        : null;
+    },
+    matches(selector) {
+      return selectorParts(selector).some(item =>
+        item.startsWith('input')
+      );
+    },
+    closest() {
+      return null;
+    },
+  };
+
+  const submit = {
+    textContent: '搜索',
+    getAttribute(name) {
+      return name === 'data-e2e'
+        ? 'searchbar-button'
+        : null;
+    },
+    matches(selector) {
+      const parts = selectorParts(selector);
+      return parts.includes('button') ||
+        parts.includes(
+          '[data-e2e="searchbar-button"]'
+        );
+    },
+  };
+
+  const unrelatedLogin = {
+    textContent: '登录',
+    getAttribute() {
+      return null;
+    },
+    matches(selector) {
+      return selectorParts(selector).includes('button');
+    },
+  };
+
+  const innerOwner = {
+    tagName: 'DIV',
+    parentElement: null,
+    contains(node) {
+      return node === this ||
+        node === input ||
+        node === submit;
+    },
+    querySelector(selector) {
+      if (
+        selector ===
+        '[data-e2e="searchbar-button"]'
+      ) {
+        return submit;
+      }
+      if (selector.includes('input')) return input;
+      return null;
+    },
+    querySelectorAll() {
+      return [input, submit];
+    },
+  };
+
+  const visualShell = {
+    tagName: 'DIV',
+    parentElement: null,
+    contains(node) {
+      return node === this ||
+        node === innerOwner ||
+        innerOwner.contains(node);
+    },
+    querySelector(selector) {
+      if (
+        selector ===
+        '[data-e2e="searchbar-button"]'
+      ) {
+        return submit;
+      }
+      if (selector.includes('input')) return input;
+      return null;
+    },
+    querySelectorAll() {
+      return [input, submit];
+    },
+  };
+
+  const topNavigation = {
+    tagName: 'DIV',
+    parentElement: null,
+    contains() {
+      return true;
+    },
+    querySelector(selector) {
+      if (
+        selector ===
+        '[data-e2e="searchbar-button"]'
+      ) {
+        return submit;
+      }
+      if (selector.includes('input')) return input;
+      return null;
+    },
+    querySelectorAll() {
+      return [input, submit, unrelatedLogin];
+    },
+  };
+
+  const header = {
+    tagName: 'HEADER',
+    parentElement: null,
+    contains() {
+      return true;
+    },
+  };
+
+  input.parentElement = innerOwner;
+  innerOwner.parentElement = visualShell;
+  visualShell.parentElement = topNavigation;
+  topNavigation.parentElement = header;
+
+  const site = redirect.getTargetSite(
+    'www.douyin.com',
+    ['douyin.com']
+  );
+
+  assert.equal(
+    redirect.findDouyinSearchOwner(input, site),
+    visualShell
+  );
+});
+
+test('Douyin 原生搜索 CSS 使用 display none，不再保留占位', () => {
+  const selectorStart = redirectCss.indexOf(
+    'input[data-e2e="searchbar-input"]'
+  );
+  assert.notEqual(
+    selectorStart,
+    -1,
+    '必须存在原生搜索 input 规则'
+  );
+
+  const ruleStart = redirectCss.indexOf(
+    '{',
+    selectorStart
+  );
+  const ruleEnd = redirectCss.indexOf(
+    '}',
+    ruleStart
+  );
+  assert.ok(ruleStart > selectorStart && ruleEnd > ruleStart);
+
+  const declarationBlock = redirectCss.slice(
+    ruleStart + 1,
+    ruleEnd
+  );
+  assert.match(
+    declarationBlock,
+    /display:\s*none\s*!important/
+  );
+  assert.match(
+    declarationBlock,
+    /visibility:\s*hidden\s*!important/
+  );
+  assert.match(
+    declarationBlock,
+    /pointer-events:\s*none\s*!important/
   );
 });
 
@@ -179,7 +365,7 @@ test('随机 class 浮层覆盖初始 DOM、文本变化和低成本定时跟踪
   );
   assert.match(
     controllerSource,
-    /mutation\.type === 'characterData'/
+    /function collectObserverBatchPlan\(\s*mutations\s*\)[\s\S]*?else if\s*\(\s*type\s*===\s*['"]characterData['"]\s*\)/
   );
   assert.match(
     controllerSource,
@@ -187,7 +373,7 @@ test('随机 class 浮层覆盖初始 DOM、文本变化和低成本定时跟踪
   );
   assert.match(
     controllerSource,
-    /DOMContentLoaded[\s\S]*?installObserver\(\)[\s\S]*?scan\(documentRef\)/
+    /DOMContentLoaded[\s\S]*?installObserver\(\)[\s\S]*?scan\(\s*documentRef\s*\)/
   );
 });
 
@@ -212,5 +398,94 @@ test('自绘入口文案只保留一个搜索入口', () => {
       ['douyin.com']
     ),
     null
+  );
+});
+
+test('最终运行时使用 hover/focus 触发的六秒清理窗口', () => {
+  assert.equal(
+    redirect.POPUP_SWEEP_HOVER_WINDOW_MS,
+    6000
+  );
+  assert.match(
+    controllerSource,
+    /function stopOriginalHover\(\s*event\s*\)[\s\S]*?armPopupSweepWindow\(\)[\s\S]*?purgeAllPopups\(\)/
+  );
+  assert.match(
+    controllerSource,
+    /function armPopupSweepWindow\(\)[\s\S]*?setInterval\([\s\S]*?POPUP_SWEEP_INTERVAL_MS[\s\S]*?setTimeout\([\s\S]*?POPUP_SWEEP_HOVER_WINDOW_MS/
+  );
+  assert.doesNotMatch(
+    controllerSource,
+    /msp_native_search_perf|msp_native_search_ablation|PerformanceObserver|__MYSEARCH_NATIVE_SEARCH_PERF__|\bperf\./
+  );
+  assert.doesNotMatch(
+    controllerSource,
+    /startPopupSweep\(\s*['"]permanent['"]/
+  );
+});
+
+test('Observer 批次计划只做 root 去重且不改变 root 语义', () => {
+  const sharedTarget = { name: 'shared-target' };
+  const sharedNode = { name: 'shared-node' };
+  const attributeParent = {
+    name: 'attribute-parent',
+  };
+  const attributeTarget = {
+    parentElement: attributeParent,
+  };
+  const textParent = { name: 'text-parent' };
+  const textNode = {
+    parentElement: textParent,
+  };
+
+  const plan =
+    redirect.collectObserverBatchPlan([
+      {
+        type: 'childList',
+        target: sharedTarget,
+        addedNodes: [sharedNode],
+      },
+      {
+        type: 'childList',
+        target: sharedTarget,
+        addedNodes: [sharedNode],
+      },
+      {
+        type: 'attributes',
+        target: attributeTarget,
+      },
+      {
+        type: 'characterData',
+        target: textNode,
+      },
+    ]);
+
+  assert.deepEqual(
+    new Set(plan.roots),
+    new Set([
+      sharedNode,
+      sharedTarget,
+      attributeParent,
+      textParent,
+    ])
+  );
+});
+
+test('Observer 默认使用批次单遍路径且旧 A0 路径已移除', () => {
+  assert.match(
+    controllerSource,
+    /collectObserverBatchPlan\(mutations\)/
+  );
+  assert.match(
+    controllerSource,
+    /scan\(\s*root\s*,\s*\{[\s\S]*?skipFinalFullPurge:\s*true/
+  );
+  assert.match(
+    controllerSource,
+    /finally\s*\{[\s\S]*?purgeAllPopups\(\)/
+  );
+  assert.doesNotMatch(
+    controllerSource,
+    /observerSinglePassAblation|OBSERVER_SINGLE_PASS_ABLATION|mutation_single_pass|mutation_batch/
   );
 });

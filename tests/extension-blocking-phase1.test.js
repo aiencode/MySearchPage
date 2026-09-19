@@ -271,10 +271,11 @@ test('main-page searches are blocked before opening and create sessions when all
   const background = read('extension/background/ua-controller.js');
   const findMatch = loadNamedFunction(
     'extension/background/ua-controller.js',
-    'findBlockingSearchMatchBG'
+    'findBlockingSearchMatchBG',
+    { URL }
   );
   const rules = {
-    blockedKeywords: ['赌博'],
+    blockedKeywords: ['赌博', '光王'],
     blockedUrlPatterns: ['blocked.example'],
   };
 
@@ -285,6 +286,15 @@ test('main-page searches are blocked before opening and create sessions when all
   );
   assert.equal(keywordMatch.kind, 'keyword');
   assert.equal(keywordMatch.value, '赌博');
+
+  const encodedYouTubeMatch = findMatch(
+    '',
+    'https://www.youtube.com/results?' +
+      'search_query=%E5%85%89%E7%8E%8B',
+    rules
+  );
+  assert.equal(encodedYouTubeMatch.kind, 'keyword');
+  assert.equal(encodedYouTubeMatch.value, '光王');
 
   const urlMatch = findMatch(
     '普通内容',
@@ -318,6 +328,349 @@ test('main-page searches are blocked before opening and create sessions when all
   );
   assert.match(background, /chrome\.tabs\.create\(\{/);
   assert.match(background, /openerTabId/);
+});
+
+test('search keyword matches become page-level blocks and persistent gates stay separate', () => {
+  const controller = read('extension/content/blocking-controller.js');
+  const youtubeSearchTextFromUrl = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'youtubeSearchTextFromUrl',
+    { URL, String }
+  );
+  assert.equal(
+    youtubeSearchTextFromUrl(
+      'https://www.youtube.com/results?' +
+        'search_query=%E5%85%89%E7%8E%8B',
+      'https://www.youtube.com/'
+    ),
+    '光王'
+  );
+  assert.equal(
+    youtubeSearchTextFromUrl(
+      'https://www.youtube.com/watch?v=allowed',
+      'https://www.youtube.com/'
+    ),
+    ''
+  );
+  assert.equal(
+    youtubeSearchTextFromUrl(
+      'https://example.test/results?search_query=光王',
+      'https://www.youtube.com/'
+    ),
+    ''
+  );
+
+  const searchTextFromUrl = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'searchTextFromUrl',
+    { URL, String }
+  );
+  assert.equal(
+    searchTextFromUrl(
+      'https://www.douyin.com/jingxuan/search/%E5%85%89%E7%8E%8B?type=general',
+      'https://www.douyin.com/'
+    ),
+    '光王'
+  );
+
+  const searchMatch = {
+    kind: 'keyword',
+    value: '光王',
+    pageSource: 'search',
+  };
+  const detectedPageBlockingMatch = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'detectedPageBlockingMatch',
+    {
+      global: {
+        location: {
+          href: 'https://www.youtube.com/results?search_query=光王',
+        },
+      },
+      currentUrlPattern: null,
+      currentTitleKeyword: null,
+      currentSearchMatch: searchMatch,
+      normalizeNavigationUrl(rawUrl) {
+        return rawUrl;
+      },
+    }
+  );
+  assert.equal(detectedPageBlockingMatch(), searchMatch);
+  const currentPageBlockingMatch = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'currentPageBlockingMatch',
+    {
+      persistentPageGateMatch: null,
+      currentSearchMatch: searchMatch,
+      detectedPageBlockingMatch,
+    }
+  );
+  assert.equal(currentPageBlockingMatch(), searchMatch);
+
+  let pauseCount = 0;
+  let clickRecords = 0;
+  let feedbackCount = 0;
+  let persistentImageShows = 0;
+  const gateGlobals = {
+    persistentPageGateMatch: null,
+    pageIsBlocked: false,
+    showPersistentPageGateImage() {
+      persistentImageShows += 1;
+      return 'content/feedback-assets/fixed.png';
+    },
+    pausePageMedia() {
+      pauseCount += 1;
+    },
+    recordClick() {
+      clickRecords += 1;
+      return 100 + clickRecords;
+    },
+    showFeedback() {
+      feedbackCount += 1;
+    },
+  };
+  const latchPersistentPageGate = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'latchPersistentPageGate',
+    gateGlobals
+  );
+  const pageMatch = { kind: 'keyword', value: '光王', pageSource: 'title' };
+  assert.equal(latchPersistentPageGate(pageMatch), true);
+  assert.equal(latchPersistentPageGate(pageMatch), false);
+  assert.equal(gateGlobals.pageIsBlocked, true);
+  assert.equal(pauseCount, 1);
+  assert.equal(clickRecords, 1);
+  assert.equal(feedbackCount, 1);
+  assert.equal(persistentImageShows, 1);
+
+  const eventGlobals = {
+    persistentPageGateMatch: pageMatch,
+    NAVIGATION_EVENT: 'mysearch-blocking-navigation-attempt',
+    recordClick() {
+      clickRecords += 1;
+      return 200;
+    },
+    showFeedback() {
+      feedbackCount += 1;
+    },
+  };
+  const persistentGateEventNeedsFeedback = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'persistentGateEventNeedsFeedback',
+    eventGlobals
+  );
+  eventGlobals.persistentGateEventNeedsFeedback =
+    persistentGateEventNeedsFeedback;
+  for (const type of [
+    'click',
+    'pointerdown',
+    'auxclick',
+    'submit',
+    'mysearch-blocking-navigation-attempt',
+  ]) {
+    assert.equal(persistentGateEventNeedsFeedback({ type }), true, type);
+  }
+  for (const key of ['Enter', ' ', 'Spacebar']) {
+    assert.equal(
+      persistentGateEventNeedsFeedback({ type: 'keydown', key }),
+      true,
+      key
+    );
+  }
+  assert.equal(
+    persistentGateEventNeedsFeedback({ type: 'keydown', key: 'a' }),
+    false
+  );
+  assert.equal(
+    persistentGateEventNeedsFeedback({
+      type: 'keydown',
+      key: 'Enter',
+      isComposing: true,
+    }),
+    false
+  );
+  for (const type of [
+    'play',
+    'mysearch-blocking-media-attempt',
+    'mousemove',
+    'pointermove',
+  ]) {
+    assert.equal(persistentGateEventNeedsFeedback({ type }), false, type);
+  }
+
+  const blockPersistentPageEvent = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'blockPersistentPageEvent',
+    eventGlobals
+  );
+  const makeEvent = type => ({
+    type,
+    target: {
+      pause() {
+        this.paused = true;
+      },
+    },
+    preventDefault() {
+      this.prevented = true;
+    },
+    stopPropagation() {
+      this.stopped = true;
+    },
+    stopImmediatePropagation() {
+      this.immediatelyStopped = true;
+    },
+  });
+  const passiveMediaEvent = makeEvent('play');
+  assert.equal(blockPersistentPageEvent(passiveMediaEvent), true);
+  assert.equal(passiveMediaEvent.prevented, true);
+  assert.equal(passiveMediaEvent.target.paused, true);
+  assert.equal(clickRecords, 1);
+  assert.equal(feedbackCount, 1);
+
+  const activeClickEvent = makeEvent('click');
+  assert.equal(blockPersistentPageEvent(activeClickEvent), true);
+  assert.equal(clickRecords, 2);
+  assert.equal(feedbackCount, 2);
+
+  const activeNavigationEvent = makeEvent(
+    'mysearch-blocking-navigation-attempt'
+  );
+  assert.equal(
+    blockPersistentPageEvent(activeNavigationEvent),
+    true
+  );
+  assert.equal(activeNavigationEvent.prevented, true);
+  assert.equal(clickRecords, 3);
+  assert.equal(feedbackCount, 3);
+
+  const blockEventSource = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'blockEvent',
+    {}
+  ).toString();
+  assert.ok(
+    blockEventSource.indexOf('event.preventDefault()') <
+      blockEventSource.indexOf('recordClick(match)')
+  );
+
+  const depth3Source = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'recordDepth3Attempt',
+    {}
+  ).toString();
+  assert.ok(
+    depth3Source.indexOf('recordClick(match)') <
+      depth3Source.indexOf("type: 'RECORD_BLOCKING_EVENT'")
+  );
+  assert.match(
+    controller,
+    /global\.addEventListener\('submit', handleSearchSubmit, true\)/
+  );
+  assert.match(
+    controller,
+    /findYouTubeSearchKeywordMatch\(targetUrl\)/
+  );
+  assert.doesNotMatch(
+    controller,
+    /addEventListener\(\s*['"](?:mousemove|pointermove|mouseover|mouseenter)['"]/
+  );
+  assert.match(controller, /function latchPersistentPageGate/);
+  assert.match(controller, /function blockPersistentPageEvent/);
+  assert.match(controller, /blockPersistentPageEvent\(event\)/);
+  assert.match(
+    controller,
+    /global\.addEventListener\('play', handleNativeMediaPlay, true\)/
+  );
+  assert.doesNotMatch(
+    controller,
+    /activeBlockingStateKey|rulesSignature|function blockingStateKey|function beginBlockingState|function activateBlockingState/
+  );
+  const finishPauseSource = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'finishFeedbackPause',
+    {}
+  ).toString();
+  assert.doesNotMatch(
+    finishPauseSource,
+    /persistentPageGate|clearPersistentPageGate/
+  );
+
+  const transientImageSource = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'showBlockingImageFeedback',
+    {}
+  ).toString();
+  assert.match(transientImageSource, /setTimeout/);
+  assert.match(transientImageSource, /5000/);
+  assert.match(
+    transientImageSource,
+    /TRANSIENT_FEEDBACK_IMAGE_ID/
+  );
+
+  const persistentImageSource = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'showPersistentPageGateImage',
+    {}
+  ).toString();
+  assert.match(
+    persistentImageSource,
+    /PERSISTENT_FEEDBACK_IMAGE_ID/
+  );
+  assert.match(
+    persistentImageSource,
+    /renderBlockingFeedbackImage/
+  );
+  assert.doesNotMatch(
+    persistentImageSource,
+    /setTimeout|showBlockingImageFeedback/
+  );
+
+  const clearGateSource = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'clearPersistentPageGate',
+    {}
+  ).toString();
+  assert.match(
+    clearGateSource,
+    /PERSISTENT_FEEDBACK_IMAGE_ID/
+  );
+  assert.doesNotMatch(
+    clearGateSource,
+    /TRANSIENT_FEEDBACK_IMAGE_ID/
+  );
+
+  const shouldClearPersistentPageGate = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'shouldClearPersistentPageGate',
+    {}
+  );
+  assert.equal(
+    shouldClearPersistentPageGate(pageMatch, null, false, false),
+    false
+  );
+  assert.equal(
+    shouldClearPersistentPageGate(pageMatch, null, true, true),
+    false
+  );
+  assert.equal(
+    shouldClearPersistentPageGate(
+      pageMatch,
+      pageMatch,
+      true,
+      false
+    ),
+    false
+  );
+  assert.equal(
+    shouldClearPersistentPageGate(pageMatch, null, true, false),
+    true
+  );
+  assert.match(controller, /function showPersistentPageGateImage/);
+  assert.match(controller, /mysearch-blocking-page-gate-image/);
+  assert.match(
+    controller,
+    /showBehaviorPauseFeedback\(\);\s*const feedbackImageAsset = match\.persistentPageGate\s*\?\s*showPersistentPageGateImage\(\)\s*:\s*showBlockingImageFeedback\(\)/
+  );
 });
 
 test('extension new-tab search uses the checked background open path without a bypass', () => {
@@ -373,6 +726,9 @@ test('legacy OPEN_SEARCH_RESULT fallback blocks only stored matches', async () =
       MySearchBlockingRules: rulesApi,
       Number,
       Promise,
+      isBlockingEnabledForLegacySearch() {
+        return true;
+      },
       chrome: {
         runtime: {
           lastError: null,
@@ -469,6 +825,7 @@ test('first blocked search creates neither SearchSession nor tab', async () => {
     blockedKeywords: ['赌博'],
     blockedUrlPatterns: [],
   };
+  let blockingEnabled = true;
   let sessionStarts = 0;
   let tabCreates = 0;
   const openSearchResult = loadNamedFunction(
@@ -479,6 +836,9 @@ test('first blocked search creates neither SearchSession nor tab', async () => {
       Number,
       URL,
       Error,
+      async getBlockingEnabledBG() {
+        return blockingEnabled;
+      },
       async getBlockingRulesBG() {
         return rules;
       },
@@ -533,6 +893,300 @@ test('first blocked search creates neither SearchSession nor tab', async () => {
   assert.equal(allowed.opened, true);
   assert.equal(sessionStarts, 1);
   assert.equal(tabCreates, 1);
+
+  blockingEnabled = false;
+  rules = {
+    blockedKeywords: ['赌博'],
+    blockedUrlPatterns: [],
+  };
+  const disabled = await openSearchResult(
+    { tab: { id: 10 } },
+    '再次搜索赌博内容',
+    'https://www.douyin.com/search/test'
+  );
+  assert.equal(disabled.blocked, false);
+  assert.equal(disabled.opened, true);
+  assert.equal(sessionStarts, 1, '关闭总开关后不再建立阻断搜索会话');
+  assert.equal(tabCreates, 2, '关闭总开关后仍可打开搜索结果');
+});
+
+test('temporary blocking master switch is wired from popup to enforcement', () => {
+  const popupHtml = read('extension/popup/popup.html');
+  const popup = read('extension/popup/popup.js');
+  const background = read('extension/background/ua-controller.js');
+  const controller = read('extension/content/blocking-controller.js');
+  const navigation = read('extension/navigation/navigation.js');
+
+  assert.match(popupHtml, /id="blocking-toggle"/);
+  assert.match(popupHtml, /id="blocking-status"/);
+  assert.match(popup, /type: 'TOGGLE_BLOCKING'/);
+  assert.match(popup, /response\.blockingEnabled !== false/);
+  assert.match(background, /const BLOCKING_ENABLED_STORAGE_KEY_BG = 'blockingEnabled'/);
+  assert.match(background, /case 'GET_BLOCKING_STATUS'/);
+  assert.match(background, /case 'TOGGLE_BLOCKING'/);
+  assert.match(background, /blockingEnabled \? await getBlockingRulesBG\(\) : null/);
+  assert.match(controller, /const BLOCKING_ENABLED_STORAGE_KEY = 'blockingEnabled'/);
+  assert.match(controller, /type: 'GET_BLOCKING_STATUS'/);
+  assert.match(controller, /blockingEnabled !== true/);
+  assert.match(
+    controller,
+    /const DEPTH_NAVIGATION_ENFORCEMENT_ENABLED = false/
+  );
+  assert.match(
+    background,
+    /const DEPTH_NAVIGATION_ENFORCEMENT_ENABLED_BG = false/
+  );
+  assert.match(controller, /changes\[BLOCKING_ENABLED_STORAGE_KEY\]/);
+  assert.match(navigation, /isBlockingEnabledForLegacySearch/);
+  const initSource = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'init',
+    {}
+  ).toString();
+  assert.ok(
+    initSource.indexOf('markBlockingRuntimeVersion()') <
+      initSource.indexOf('loadBlockingEnabled()'),
+    '运行版本标记必须独立于开关并先于开关状态读取'
+  );
+});
+
+test('Douyin history scroll, autoplay and detail close stay passive', () => {
+  const controller = read('extension/content/blocking-controller.js');
+  const adapter = {
+    name: 'douyin',
+    domains: ['douyin.com'],
+  };
+  const viewState = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'douyinHistoryViewState',
+    {
+      URL,
+      global: {
+        location: { href: 'https://www.douyin.com/' },
+      },
+      isAdapterDomainUrl() { return true; },
+    }
+  );
+
+  const history = viewState(
+    '',
+    'https://www.douyin.com/user/self?' +
+      'from_tab_name=main&showTab=record',
+    false,
+    adapter
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(history)), {
+    context: 'douyin-history',
+    passive: true,
+  });
+
+  const detail = viewState(
+    history.context,
+    'https://www.douyin.com/video/123456',
+    true,
+    adapter
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(detail)), {
+    context: 'douyin-history',
+    passive: false,
+  });
+
+  const closedWithStaleUrl = viewState(
+    detail.context,
+    'https://www.douyin.com/video/123456',
+    false,
+    adapter
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(closedWithStaleUrl)), {
+    context: 'douyin-history',
+    passive: true,
+  });
+
+  assert.deepEqual(JSON.parse(JSON.stringify(viewState(
+    closedWithStaleUrl.context,
+    'https://www.douyin.com/recommend',
+    false,
+    adapter
+  ))), {
+    context: '',
+    passive: false,
+  });
+
+  const handleMediaAttempt = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'handleMediaAttempt',
+    {
+      blockingEnabled: true,
+      DEPTH_NAVIGATION_ENFORCEMENT_ENABLED: false,
+      navigationContext: null,
+      blockPersistentPageEvent() { return false; },
+      currentPageBlockingMatch() { return null; },
+    }
+  );
+  const passivePlay = {
+    type: 'mysearch-blocking-media-attempt',
+    target: {},
+    preventDefault() {
+      throw new Error('自动预览不应被阻断');
+    },
+    stopPropagation() {
+      throw new Error('自动预览不应被阻断');
+    },
+    stopImmediatePropagation() {
+      throw new Error('自动预览不应被阻断');
+    },
+  };
+  assert.doesNotThrow(() => handleMediaAttempt(passivePlay));
+  assert.doesNotMatch(
+    handleMediaAttempt.toString(),
+    /getInteractionMatch/
+  );
+
+  const isAllowedDetailDismissal = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'isAllowedDetailDismissal',
+    {
+      depthAdapterEntry() { return { name: 'douyin' }; },
+      isElement() { return true; },
+    }
+  );
+  assert.equal(
+    isAllowedDetailDismissal({
+      type: 'keydown',
+      key: 'Escape',
+    }),
+    true
+  );
+  assert.equal(
+    isAllowedDetailDismissal({
+      type: 'click',
+      target: {
+        closest(selector) {
+          return selector.includes('[data-e2e*="close"]')
+            ? this
+            : null;
+        },
+      },
+    }),
+    true
+  );
+
+  assert.match(
+    controller,
+    /const nextTitleKeyword = onPassiveCollectionPage\s*\?\s*null/
+  );
+  assert.match(controller, /isAllowedDetailDismissal\(event\)/);
+  assert.doesNotMatch(controller, /blockDuringFeedbackPause/);
+  assert.match(
+    controller,
+    /#\$\{FEEDBACK_PAUSE_ID\} \{[\s\S]*?pointer-events: none !important;/
+  );
+});
+
+test('returning from a Douyin video to search results is never depth 3', () => {
+  const resets = [];
+  const handlePageNavigation = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'handlePageNavigation',
+    {
+      blockingEnabled: true,
+      DEPTH_NAVIGATION_ENFORCEMENT_ENABLED: true,
+      blockDuringFeedbackPause() { return false; },
+      blockPersistentPageEvent() { return false; },
+      findYouTubeSearchKeywordMatch() { return null; },
+      findUrlMatch() { return null; },
+      douyinHistoryViewState() {
+        return { context: '', passive: false };
+      },
+      currentPageBlockingMatch() { return null; },
+      navigationContext: {
+        enabled: true,
+        depth: 2,
+        contentId: 'douyin:100',
+      },
+      depthAdapterEntry() { return { name: 'douyin' }; },
+      isSearchResultsUrl(url) {
+        return String(url).includes('/search');
+      },
+      resetNavigationToSearchResults(url) { resets.push(url); },
+      depth3Match() {
+        throw new Error('返回搜索结果不应进入 depth3 判断');
+      },
+    }
+  );
+  const event = {
+    detail: {
+      url: 'https://www.douyin.com/search/%E6%88%98%E5%88%A9?type=video',
+    },
+  };
+  assert.doesNotThrow(() => handlePageNavigation(event));
+  assert.deepEqual(resets, [event.detail.url]);
+});
+
+test('baseline mode does not block ordinary depth navigation', () => {
+  const preventions = [];
+  const handlePageNavigation = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'handlePageNavigation',
+    {
+      blockingEnabled: true,
+      DEPTH_NAVIGATION_ENFORCEMENT_ENABLED: false,
+      blockDuringFeedbackPause() { return false; },
+      blockPersistentPageEvent() { return false; },
+      findYouTubeSearchKeywordMatch() { return null; },
+      findUrlMatch() { return null; },
+      douyinHistoryViewState() {
+        return { context: '', passive: false };
+      },
+      currentPageBlockingMatch() { return null; },
+      navigationContext: {
+        enabled: true,
+        depth: 2,
+        contentId: 'douyin:100',
+      },
+      depthAdapterEntry() { return { name: 'douyin' }; },
+      isSearchResultsUrl() { return false; },
+      depth3Match() {
+        throw new Error('基础模式不应进入 depth3 判断');
+      },
+      blockDepth3() {
+        throw new Error('基础模式不应触发 depth3 阻断');
+      },
+    }
+  );
+  const event = {
+    detail: { url: 'https://www.douyin.com/video/200' },
+    preventDefault() { preventions.push('preventDefault'); },
+    stopPropagation() { preventions.push('stopPropagation'); },
+    stopImmediatePropagation() { preventions.push('stopImmediatePropagation'); },
+  };
+  assert.doesNotThrow(() => handlePageNavigation(event));
+  assert.deepEqual(preventions, []);
+});
+
+test('baseline mode does not create high-risk navigation sessions', () => {
+  const supportsDepthNavigation = loadNamedFunction(
+    'extension/background/ua-controller.js',
+    'supportsDepthNavigationBG',
+    {
+      DEPTH_NAVIGATION_ENFORCEMENT_ENABLED_BG: false,
+      SUPPORTED_DEPTH_DOMAINS_BG: ['douyin.com'],
+      navigationDomainMatchesBG(hostname, rule) {
+        return String(hostname).includes(String(rule));
+      },
+      normalizeNavigationHostnameBG(value) {
+        return String(value).replace(/^https?:\/\//, '')
+          .split('/')[0];
+      },
+    }
+  );
+  assert.equal(
+    supportsDepthNavigation(
+      'https://www.douyin.com/search/%E6%88%98%E5%88%A9',
+      ['douyin.com']
+    ),
+    false
+  );
 });
 
 test('Douyin adapter blocks a keyword matched on the complete result card', () => {
@@ -547,6 +1201,46 @@ test('Douyin adapter blocks a keyword matched on the complete result card', () =
     controller,
     /kind: 'keyword',\s*value: keyword,\s*element: adapterCard/
   );
+});
+
+test('keyword-matched search cards replace original content with a low-stimulus placeholder', () => {
+  const controller = read('extension/content/blocking-controller.js');
+  const mediaAdapters = read('extension/content/search-media-adapters.js');
+  assert.match(controller, /data-mysearch-blocked-card/);
+  assert.match(controller, /searchMediaCardSelector/);
+  assert.match(controller, /resultCardsInElement/);
+  assert.match(controller, /hideBlockedCard\(card, match\)/);
+  assert.match(controller, /placeholder\.textContent = '已屏蔽'/);
+  assert.match(controller, /for \(const child of childNodes\) card\.removeChild/);
+  assert.match(controller, /function restoreBlockedCards\(\)/);
+  assert.match(controller, /function blockedCardMatch\(card\)/);
+  assert.match(controller, /blockedCardMatch\(card\) \|\| matchElement\(card\)/);
+  assert.match(controller, /function fallbackResultCardForElement\(element, adapterEntry\)/);
+  assert.match(controller, /function genericResultCardForElement\(element, adapterEntry\)/);
+  assert.match(controller, /具备“媒体 \+ 内容链接 \+ 少量文字”/);
+  assert.match(controller, /function searchTextFromUrl\(rawUrl/);
+  assert.match(controller, /PAGE_GATE_ATTR/);
+  assert.match(controller, /\[data-e2e\*="search-result-item"\]/);
+  assert.match(controller, /\[data-e2e="search-video-card"\]/);
+  assert.match(controller, /\[data-e2e\*="search-video-card"\]/);
+  assert.doesNotMatch(controller, /\[data-e2e="search-result"\]/);
+  assert.match(controller, /\[class\*="video-card"\]/);
+  assert.match(mediaAdapters, /\[data-e2e="search-video-card"\]/);
+  assert.match(mediaAdapters, /\[data-e2e\*="search-video-card"\]/);
+  assert.doesNotMatch(mediaAdapters, /cards: '\[data-e2e="search-result"\]/);
+  assert.match(
+    controller,
+    /\[\$\{BLOCKED_ATTR\}\]:not\(\[\$\{BLOCKED_CARD_ATTR\}\]\)/
+  );
+  assert.match(controller, /restoreBlockedCards\(\);\s*\n\s*rules = rulesApi/);
+});
+
+test('Douyin current jingxuan search route is treated as a result page', () => {
+  const controller = read('extension/content/blocking-controller.js');
+  const mediaAdapters = read('extension/content/search-media-adapters.js');
+  const route = '/^\\/(?:jingxuan\\/)?search(?:\\/|$)/';
+  assert.ok(controller.includes(route));
+  assert.ok(mediaAdapters.includes(route));
 });
 
 test('Xiaohongshu content IDs are found from SPA cards and detail links', () => {
@@ -624,12 +1318,201 @@ test('Xiaohongshu content IDs are found from SPA cards and detail links', () => 
   );
 });
 
+test('Xiaohongshu closes a hidden detail before allowing the next search result', () => {
+  const hiddenDetail = {
+    visible: false,
+    hasAttribute() { return false; },
+    getAttribute() { return null; },
+    closest() { return null; },
+  };
+  const searchResultsRoot = {
+    visible: true,
+    closest() { return null; },
+  };
+  const currentPageContentId = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'currentPageContentId',
+    {
+      DEPTH3_REJECTED_ATTR: 'data-mysearch-depth3-rejected',
+      global: {
+        location: { href: 'https://www.xiaohongshu.com/explore/first' },
+        document: {
+          querySelectorAll(selector) {
+            return selector === '.note-detail-mask' ||
+              selector.includes('note-detail')
+              ? [hiddenDetail]
+              : [searchResultsRoot];
+          },
+        },
+      },
+      depthAdapterEntry() {
+        return {
+          name: 'xiaohongshu',
+          searchRoots: ['.feeds-container'],
+          details: ['.note-detail-mask'],
+        };
+      },
+      isVisiblePageElement(element) { return element.visible; },
+      hasVisibleSearchResultsRoot() { return true; },
+      contentIdFromElement() { return 'xiaohongshu:first'; },
+      syntheticDetailContentId() { return 'xiaohongshu:synthetic'; },
+      contentIdFromUrl() { return 'xiaohongshu:first'; },
+    }
+  );
+  assert.equal(
+    currentPageContentId(),
+    '',
+    'a hidden old detail must not keep the tab at depth 2'
+  );
+
+  const updates = [];
+  const synchronizeDepthFromPage = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'synchronizeDepthFromPage',
+    {
+      navigationContext: {
+        enabled: true,
+        depth: 2,
+        contentId: 'xiaohongshu:first',
+      },
+      blockingEnabled: true,
+      DEPTH_NAVIGATION_ENFORCEMENT_ENABLED: true,
+      global: {
+        location: { href: 'https://www.xiaohongshu.com/explore/first' },
+      },
+      depthAdapterEntry() {
+        return { name: 'xiaohongshu' };
+      },
+      clearDepth2Cleanup() {},
+      currentPageContentId() { return ''; },
+      isSearchResultsView() { return true; },
+      updateNavigationContext(...args) { updates.push(args); },
+    }
+  );
+  synchronizeDepthFromPage();
+  assert.deepEqual(JSON.parse(JSON.stringify(updates)), [[1, '', {
+    contentUrl: '',
+    pendingDepth: 1,
+    pendingContentId: '',
+    pendingContentUrl: '',
+  }]]);
+
+  let cleanupCalls = 0;
+  const visibleDetailContext = {
+    enabled: true,
+    depth: 2,
+    contentId: 'xiaohongshu:first',
+  };
+  const synchronizeWithVisibleDetail = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'synchronizeDepthFromPage',
+    {
+      navigationContext: visibleDetailContext,
+      blockingEnabled: true,
+      DEPTH_NAVIGATION_ENFORCEMENT_ENABLED: true,
+      global: {
+        location: { href: 'https://www.xiaohongshu.com/explore/first' },
+      },
+      depthAdapterEntry() {
+        return { name: 'xiaohongshu' };
+      },
+      clearDepth2Cleanup() {},
+      currentPageContentId() { return 'xiaohongshu:first'; },
+      isSearchResultsView() { return true; },
+      depth3Match() { return null; },
+      applyDepth2Cleanup() { cleanupCalls += 1; },
+    }
+  );
+  synchronizeWithVisibleDetail();
+  assert.equal(
+    visibleDetailContext.depth,
+    2,
+    'an actually visible detail must remain at depth 2'
+  );
+  assert.equal(cleanupCalls, 1);
+});
+
+test('Douyin closes a hidden detail before allowing the next search result', () => {
+  const hiddenDetail = {
+    visible: false,
+    hasAttribute() { return false; },
+    getAttribute() { return null; },
+    closest() { return null; },
+  };
+  const searchResultsRoot = {
+    visible: true,
+    closest() { return null; },
+  };
+  const currentPageContentId = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'currentPageContentId',
+    {
+      DEPTH3_REJECTED_ATTR: 'data-mysearch-depth3-rejected',
+      global: {
+        location: { href: 'https://www.douyin.com/video/100' },
+        document: {
+          querySelectorAll(selector) {
+            return selector === '[data-e2e="feed-active-video"][data-aweme-id]' ||
+              selector === '[data-e2e="video-detail"][data-aweme-id]'
+              ? [hiddenDetail]
+              : [searchResultsRoot];
+          },
+        },
+      },
+      depthAdapterEntry() {
+        return {
+          name: 'douyin',
+          searchRoots: ['[data-e2e="search-result-list"]'],
+          details: [
+            '[data-e2e="feed-active-video"][data-aweme-id]',
+            '[data-e2e="video-detail"][data-aweme-id]',
+          ],
+        };
+      },
+      isVisiblePageElement(element) { return element.visible; },
+      hasVisibleSearchResultsRoot() { return true; },
+      contentIdFromElement() { return 'douyin:100'; },
+      contentIdFromUrl(rawUrl, adapter) {
+        const match = String(rawUrl).match(/\/video\/([0-9]+)/);
+        return match ? `${adapter.name}:${match[1]}` : '';
+      },
+    }
+  );
+  assert.equal(
+    currentPageContentId(),
+    '',
+    '抖音隐藏的旧详情不能继续把标签页占在第 2 层'
+  );
+
+  const isSearchResultsView = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'isSearchResultsView',
+    {
+      depthAdapterEntry() {
+        return {
+          name: 'douyin',
+          searchRoots: ['[data-e2e="search-result-list"]'],
+        };
+      },
+      isSearchResultsUrl() { return false; },
+      hasVisibleSearchResultsRoot() { return true; },
+    }
+  );
+  assert.equal(
+    isSearchResultsView('https://www.douyin.com/video/100'),
+    true,
+    '抖音结果流恢复时，即使地址暂时仍是旧视频地址，也应视为结果页'
+  );
+});
+
 test('policy dashboard and old-tab takeover remain in the existing extension', () => {
   const manifest = JSON.parse(read('extension/manifest.json'));
   const policy = JSON.parse(
     read('extension/policies/blocking-policy.template.json')
   );
   const background = read('extension/background/ua-controller.js');
+  const blockingController =
+    read('extension/content/blocking-controller.js');
   const options = read('extension/options/options.html');
   const dashboard = read('extension/options/blocking-dashboard.js');
   const mediaController =
@@ -647,6 +1530,23 @@ test('policy dashboard and old-tab takeover remain in the existing extension', (
   assert.match(background, /chrome\.runtime\?\.onInstalled/);
   assert.match(background, /reconnectSearchMediaTabsBG/);
   assert.match(background, /SEARCH_MEDIA_SCRIPT_FILES_BG/);
+  assert.match(
+    background,
+    /BLOCKING_RUNTIME_VERSION_BG =\s*'explicit-rules-switch-v1'/
+  );
+  assert.match(
+    background,
+    /runtimeVersion !== BLOCKING_RUNTIME_VERSION_BG/
+  );
+  assert.match(background, /chrome\.tabs\.reload\(tab\.id\)/);
+  assert.match(
+    blockingController,
+    /BLOCKING_RUNTIME_VERSION =\s*'explicit-rules-switch-v1'/
+  );
+  assert.match(
+    blockingController,
+    /setAttribute\?\.\(\s*BLOCKING_RUNTIME_ATTR,\s*BLOCKING_RUNTIME_VERSION/
+  );
   assert.match(options, /id="blocking-stats-periods"/);
   assert.match(options, /id="blocking-feedback-stats"/);
   assert.match(options, /id="search-media-diagnostics"/);
@@ -796,8 +1696,15 @@ test('controller covers dynamic attributes and navigation boundaries', () => {
   assert.match(controller, /filter: blur\(6px\) grayscale\(1\)/);
   assert.match(
     controller,
-    /if \(!allowDeduplicatedAttempt\(match\)\) return timestamp/
+    /if \(!allowDeduplicatedAttempt\(match\)\) return null/
   );
+  assert.match(controller, /function latchPersistentPageGate/);
+  assert.match(controller, /function blockPersistentPageEvent/);
+  assert.doesNotMatch(
+    controller,
+    /activeBlockingStateKey|rulesSignature|function blockingStateKey|function beginBlockingState|function activateBlockingState/
+  );
+  assert.doesNotMatch(controller, /lastFeedbackAt/);
   assert.match(
     controller,
     /const feedbackType = 'aversive\+pause\+beep\+photo'/
@@ -836,7 +1743,7 @@ test('controller covers dynamic attributes and navigation boundaries', () => {
   );
   assert.match(
     controller,
-    /showBehaviorPauseFeedback\(\);\s*const feedbackImageAsset = showBlockingImageFeedback\(\)/
+    /showBehaviorPauseFeedback\(\);\s*const feedbackImageAsset = match\.persistentPageGate\s*\?\s*showPersistentPageGateImage\(\)\s*:\s*showBlockingImageFeedback\(\)/
   );
   assert.match(controller, /display: block !important/);
   assert.match(controller, /image\.classList\.add\('visible'\)/);
@@ -938,6 +1845,35 @@ test('high-risk navigation has persistent sessions and explicit adapters only', 
     depth: 2,
     contentId: 'douyin:100',
   }, 'douyin:100'), false);
+  const depth3Match = loadNamedFunction(
+    'extension/content/blocking-controller.js',
+    'depth3Match',
+    {
+      navigationContext: {
+        enabled: true,
+        depth: 2,
+        contentId: 'douyin:100',
+      },
+      isDepth3ContentTransition(context, contentId) {
+        return Boolean(
+          context.enabled &&
+          context.depth === 2 &&
+          context.contentId &&
+          contentId &&
+          context.contentId !== contentId
+        );
+      },
+    }
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(depth3Match('douyin:200'))),
+    {
+      kind: 'navigation',
+      value: 'douyin:200',
+      contentId: 'douyin:200',
+    },
+    '层级拦截不能伪装成用户配置的网址命中'
+  );
   const shouldRestoreUrl = loadNamedFunction(
     'extension/content/blocking-controller.js',
     'shouldRestoreCommittedDepth3Url',

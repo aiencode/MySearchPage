@@ -1,7 +1,7 @@
 /**
  * 将高风险站点的原生搜索组件整体替换为 MySearchPage 自绘入口。
  *
- * 抖音不能依赖动态 class：以 searchbar-input 和 searchbar-button
+ * 抖音不依赖动态 class：以 searchbar-input 和 searchbar-button
  * 同属的最窄祖先作为原生搜索 owner，整体移除。
  */
 (function installNativeSearchRedirect(global) {
@@ -14,6 +14,7 @@
   const BUTTON_TEXT = '搜索资料';
   const HIGH_RISK_KEY = 'highRiskDomains';
   const POPUP_SWEEP_INTERVAL_MS = 100;
+  const POPUP_SWEEP_HOVER_WINDOW_MS = 6000;
 
   const DEFAULT_HIGH_RISK_DOMAINS = Object.freeze([
     'xiaohongshu.com',
@@ -134,6 +135,26 @@
   const FORBIDDEN_POPUP_TEXT =
     /历史记录|猜你想搜|抖音热点|热榜/;
 
+  const DOUYIN_OWNER_GUARD_SELECTOR = [
+    'a[href]',
+    'button',
+    'input',
+    'textarea',
+    'select',
+    '[role="button"]',
+    'img',
+    'video',
+  ].join(',');
+
+  const DOUYIN_OWNER_STOP_TAGS = new Set([
+    'HTML',
+    'BODY',
+    'HEADER',
+    'NAV',
+    'MAIN',
+    'ASIDE',
+  ]);
+
   function normalizeDomain(value) {
     return String(value || '')
       .trim()
@@ -189,19 +210,21 @@
     }
   }
 
-  function safeQueryAll(root, selector) {
-    try {
-      return Array.from(root?.querySelectorAll?.(selector) || []);
-    } catch (error) {
-      return [];
-    }
-  }
-
   function safeQuery(root, selector) {
     try {
       return root?.querySelector?.(selector) || null;
     } catch (error) {
       return null;
+    }
+  }
+
+  function safeQueryAll(root, selector) {
+    try {
+      return Array.from(
+        root?.querySelectorAll?.(selector) || []
+      );
+    } catch (error) {
+      return [];
     }
   }
 
@@ -255,9 +278,10 @@
     const dataE2e = String(
       element.getAttribute?.('data-e2e') || ''
     );
-    const className = typeof element.className === 'string'
-      ? element.className
-      : String(element.getAttribute?.('class') || '');
+    const className =
+      typeof element.className === 'string'
+        ? element.className
+        : String(element.getAttribute?.('class') || '');
     const position = String(
       style?.position ||
       element.style?.position ||
@@ -336,10 +360,113 @@
     return true;
   }
 
-  /**
-   * 抖音动态 class 不稳定。只依赖 input 与原生 submit 的结构关系：
-   * 从 input 向上找第一个同时包含 searchbar-button 的祖先。
-   */
+  function matchesAnySelector(element, selectors) {
+    return Array.from(selectors || []).some(selector =>
+      safeMatches(element, selector)
+    );
+  }
+
+  function containsAnySelector(root, selectors) {
+    return Array.from(selectors || []).some(selector =>
+      safeMatches(root, selector) ||
+      Boolean(safeQuery(root, selector))
+    );
+  }
+
+  function isDouyinSearchRelatedControl(
+    element,
+    currentOwner,
+    targetSite
+  ) {
+    if (!element) return true;
+    if (currentOwner?.contains?.(element)) return true;
+
+    if (
+      targetSite?.submitSelector &&
+      safeMatches(element, targetSite.submitSelector)
+    ) {
+      return true;
+    }
+
+    if (
+      matchesAnySelector(
+        element,
+        targetSite?.inputSelectors
+      )
+    ) {
+      return true;
+    }
+
+    const metadata = [
+      element.getAttribute?.('data-e2e') || '',
+      element.getAttribute?.('aria-label') || '',
+      element.getAttribute?.('placeholder') || '',
+      typeof element.className === 'string'
+        ? element.className
+        : element.getAttribute?.('class') || '',
+      String(element.textContent || '').slice(0, 120),
+    ].join(' ');
+
+    return /search|搜索/i.test(metadata);
+  }
+
+  function canExpandDouyinSearchOwner(
+    candidate,
+    currentOwner,
+    targetSite
+  ) {
+    if (
+      !candidate ||
+      !currentOwner ||
+      !candidate.contains?.(currentOwner)
+    ) {
+      return false;
+    }
+
+    const tagName = String(
+      candidate.tagName || ''
+    ).toUpperCase();
+    if (DOUYIN_OWNER_STOP_TAGS.has(tagName)) {
+      return false;
+    }
+
+    if (
+      !targetSite?.submitSelector ||
+      !safeQuery(candidate, targetSite.submitSelector) ||
+      !containsAnySelector(
+        candidate,
+        targetSite.inputSelectors
+      )
+    ) {
+      return false;
+    }
+
+    if (
+      safeMatches(
+        candidate,
+        DOUYIN_OWNER_GUARD_SELECTOR
+      ) &&
+      !isDouyinSearchRelatedControl(
+        candidate,
+        currentOwner,
+        targetSite
+      )
+    ) {
+      return false;
+    }
+
+    return safeQueryAll(
+      candidate,
+      DOUYIN_OWNER_GUARD_SELECTOR
+    ).every(element =>
+      isDouyinSearchRelatedControl(
+        element,
+        currentOwner,
+        targetSite
+      )
+    );
+  }
+
   function findDouyinSearchOwner(input, targetSite) {
     if (
       targetSite?.siteDomain !== 'douyin.com' ||
@@ -349,14 +476,72 @@
       return null;
     }
 
-    let current = input.parentElement || input.parentNode || null;
+    let owner = null;
+    let current =
+      input.parentElement ||
+      input.parentNode ||
+      null;
+
     for (let depth = 0; current && depth < 12; depth += 1) {
       if (safeQuery(current, targetSite.submitSelector)) {
-        return current;
+        owner = current;
+        break;
       }
-      current = current.parentElement || current.parentNode;
+      current =
+        current.parentElement ||
+        current.parentNode ||
+        null;
     }
-    return null;
+
+    if (!owner) return null;
+
+    /*
+     * 稳定站点 selector 命中更外层搜索 owner 时优先使用。
+     * 动态 class 不参与该判断。
+     */
+    for (const selector of targetSite.ownerSelectors || []) {
+      try {
+        const configuredOwner = input.closest?.(selector);
+        if (
+          configuredOwner &&
+          configuredOwner.contains?.(owner) &&
+          safeQuery(
+            configuredOwner,
+            targetSite.submitSelector
+          )
+        ) {
+          owner = configuredOwner;
+          break;
+        }
+      } catch (error) {
+        // 单个站点 selector 失效时继续使用结构边界。
+      }
+    }
+
+    /*
+     * 外层灰色视觉 shell 通常没有稳定 class。
+     * 只跨越搜索专属包装层；遇到无关交互控件或顶部结构边界停止。
+     */
+    for (let depth = 0; depth < 4; depth += 1) {
+      const parent =
+        owner.parentElement ||
+        owner.parentNode ||
+        null;
+
+      if (
+        !canExpandDouyinSearchOwner(
+          parent,
+          owner,
+          targetSite
+        )
+      ) {
+        break;
+      }
+
+      owner = parent;
+    }
+
+    return owner;
   }
 
   function closestConfiguredOwner(input, targetSite) {
@@ -365,7 +550,7 @@
         const owner = input?.closest?.(selector);
         if (owner) return owner;
       } catch (error) {
-        // 单个站点选择器失效时继续尝试其他稳定证据。
+        // 单个选择器失效时继续尝试其余稳定证据。
       }
     }
     return null;
@@ -375,7 +560,6 @@
     if (!input || !targetSite) return null;
 
     if (targetSite.siteDomain === 'douyin.com') {
-      // 抖音禁止退化为只替换 input；必须等原生 submit 出现后整体替换。
       return findDouyinSearchOwner(input, targetSite);
     }
 
@@ -394,6 +578,41 @@
       if (safeMatches(owner, selector)) return selector;
     }
     return 'fallback-owner';
+  }
+
+  function collectObserverBatchPlan(mutations) {
+    const roots = new Set();
+    const addRoot = root => {
+      if (root) roots.add(root);
+    };
+
+    for (const mutation of Array.from(mutations || [])) {
+      const type = String(mutation?.type || 'unknown');
+
+      if (type === 'childList') {
+        for (const node of Array.from(
+          mutation.addedNodes || []
+        )) {
+          addRoot(node);
+        }
+        addRoot(mutation.target);
+      } else if (type === 'attributes') {
+        addRoot(
+          mutation.target?.parentElement ||
+          mutation.target
+        );
+      } else if (type === 'characterData') {
+        addRoot(
+          mutation.target?.parentElement ||
+          mutation.target?.parentNode ||
+          null
+        );
+      }
+    }
+
+    return {
+      roots: Array.from(roots),
+    };
   }
 
   function sendMessage(chromeApi, message) {
@@ -503,6 +722,7 @@
     let targetSite = null;
     let observer = null;
     let popupSweepTimer = null;
+    let popupSweepWindowStopTimer = null;
     let destroyed = false;
     let storageListenerInstalled = false;
     let documentGuardsInstalled = false;
@@ -514,6 +734,7 @@
     function setActiveSite(site) {
       const root = documentRef?.documentElement;
       if (!root) return;
+
       if (site?.siteDomain) {
         root.setAttribute?.(ACTIVE_ATTR, site.siteDomain);
       } else {
@@ -533,16 +754,20 @@
 
     function purgePopupSubtree(root) {
       if (!root || !targetSite) return 0;
-      const matches = new Set();
 
+      const matches = new Set();
       for (const selector of popupSelectors()) {
-        if (safeMatches(root, selector)) matches.add(root);
+        if (safeMatches(root, selector)) {
+          matches.add(root);
+        }
         for (const element of safeQueryAll(root, selector)) {
           matches.add(element);
         }
       }
 
-      for (const element of matches) removeElement(element);
+      for (const element of matches) {
+        removeElement(element);
+      }
       return matches.size;
     }
 
@@ -571,9 +796,7 @@
 
     function purgeDynamicPopupSubtree(root) {
       if (!root || !targetSite) return 0;
-
-      const replacementRoot = currentReplacementRoot();
-      if (!replacementRoot) return 0;
+      if (!currentReplacementRoot()) return 0;
 
       const candidates = new Set();
       if (root.nodeType === 1) candidates.add(root);
@@ -615,13 +838,59 @@
         purgeTrackedDynamicPopups();
     }
 
+    function popupSweepTick() {
+      purgeAllPopups();
+    }
+
+    function clearPopupSweepWindowStopTimer() {
+      if (popupSweepWindowStopTimer == null) return;
+      windowRef.clearTimeout?.(
+        popupSweepWindowStopTimer
+      );
+      popupSweepWindowStopTimer = null;
+    }
+
+    function stopPopupSweep() {
+      clearPopupSweepWindowStopTimer();
+      if (popupSweepTimer == null) return false;
+
+      windowRef.clearInterval?.(popupSweepTimer);
+      popupSweepTimer = null;
+      return true;
+    }
+
+    function armPopupSweepWindow() {
+      if (popupSweepTimer != null) return false;
+      if (
+        typeof windowRef?.setInterval !== 'function' ||
+        typeof windowRef?.setTimeout !== 'function'
+      ) {
+        return false;
+      }
+
+      popupSweepTimer = windowRef.setInterval(
+        popupSweepTick,
+        POPUP_SWEEP_INTERVAL_MS
+      );
+      popupSweepWindowStopTimer =
+        windowRef.setTimeout(() => {
+          popupSweepWindowStopTimer = null;
+          if (popupSweepTimer != null) {
+            windowRef.clearInterval?.(popupSweepTimer);
+            popupSweepTimer = null;
+          }
+        }, POPUP_SWEEP_HOVER_WINDOW_MS);
+
+      return true;
+    }
+
     function stopOriginalHover(event) {
-      const eventTarget = event?.target;
-      const replacementRoot = eventTarget?.closest?.(
+      const replacementRoot = event?.target?.closest?.(
         `[${ROOT_ATTR}="true"]`
       );
       if (!replacementRoot) return;
 
+      armPopupSweepWindow();
       purgeAllPopups();
       event.stopPropagation?.();
       event.stopImmediatePropagation?.();
@@ -706,6 +975,7 @@
               removeElement(input);
             }
           }
+
           if (targetSite.submitSelector) {
             for (const submit of safeQueryAll(
               currentRoot,
@@ -714,12 +984,11 @@
               removeElement(submit);
             }
           }
+
           purgeAllPopups();
           return currentButton;
         }
 
-        // SPA 把现有自绘入口重新包进原生灰色 owner：
-        // 将自绘 root 提升出来，再整体删除该 owner。
         if (
           currentRoot &&
           hoistReplacementOutOfOwner(owner, currentRoot)
@@ -728,8 +997,6 @@
           return currentButton;
         }
 
-        // SPA 另外创建了一套原生搜索 owner：直接删除，
-        // 不创建第二个搜索入口。
         if (!currentRoot || owner !== currentRoot) {
           removeElement(owner);
         }
@@ -739,12 +1006,13 @@
 
       const parent = owner.parentNode;
       const replacementRoot = documentRef.createElement('div');
+      replacementRoot.className =
+        'msp-native-search-entry';
       replacementRoot.setAttribute(ROOT_ATTR, 'true');
       replacementRoot.setAttribute(
         SOURCE_ATTR,
         ownerSource(owner, targetSite)
       );
-      replacementRoot.className = 'msp-native-search-entry';
       setReplacementRootStyle(replacementRoot);
 
       const button = documentRef.createElement('button');
@@ -775,8 +1043,6 @@
         replacementRoot,
       });
 
-      // 自绘入口建立后做一次全页动态候选扫描，清除在入口建立前
-      // 已存在的随机 class 浮层；后续仅跟踪少量候选，避免高频全页扫描。
       purgeDynamicPopupSubtree(documentRef);
       purgeAllPopups();
       return button;
@@ -787,7 +1053,9 @@
       if (!root || !targetSite) return inputs;
 
       for (const selector of targetSite.inputSelectors) {
-        if (safeMatches(root, selector)) inputs.add(root);
+        if (safeMatches(root, selector)) {
+          inputs.add(root);
+        }
         for (const element of safeQueryAll(root, selector)) {
           inputs.add(element);
         }
@@ -795,7 +1063,7 @@
       return inputs;
     }
 
-    function scan(root = documentRef) {
+    function scan(root = documentRef, options = {}) {
       if (destroyed || !targetSite || !root) return 0;
 
       purgePopupSubtree(root);
@@ -812,22 +1080,20 @@
       let replacements = 0;
       for (const input of collectSearchInputs(root)) {
         if (!input?.parentNode) continue;
+
         const owner = findSearchOwner(input, targetSite);
         if (!owner?.parentNode) continue;
         if (replaceOwner(owner)) replacements += 1;
       }
 
-      purgeAllPopups();
+      if (options.skipFinalFullPurge !== true) {
+        purgeAllPopups();
+      }
       return replacements;
     }
 
     function installObserver() {
-      if (
-        observer ||
-        !documentRef?.documentElement
-      ) {
-        return;
-      }
+      if (observer || !documentRef?.documentElement) return;
 
       const Observer =
         windowRef.MutationObserver ||
@@ -835,41 +1101,17 @@
       if (typeof Observer !== 'function') return;
 
       observer = new Observer(mutations => {
-        const rootsToScan = new Set();
+        const plan = collectObserverBatchPlan(mutations);
 
-        for (const mutation of mutations) {
-          if (mutation.type === 'childList') {
-            for (const node of Array.from(
-              mutation.addedNodes || []
-            )) {
-              purgePopupSubtree(node);
-              purgeDynamicPopupSubtree(node);
-              rootsToScan.add(node);
-            }
-            considerDynamicPopup(mutation.target);
-            rootsToScan.add(mutation.target);
-          } else if (mutation.type === 'attributes') {
-            purgePopupSubtree(mutation.target);
-            purgeDynamicPopupSubtree(mutation.target);
-            rootsToScan.add(
-              mutation.target?.parentElement ||
-              mutation.target
-            );
-          } else if (mutation.type === 'characterData') {
-            const parent =
-              mutation.target?.parentElement ||
-              mutation.target?.parentNode ||
-              null;
-            if (parent) {
-              purgePopupSubtree(parent);
-              considerDynamicPopup(parent);
-              rootsToScan.add(parent);
-            }
+        try {
+          for (const root of plan.roots) {
+            scan(root, {
+              skipFinalFullPurge: true,
+            });
           }
+        } finally {
+          purgeAllPopups();
         }
-
-        for (const root of rootsToScan) scan(root);
-        purgeAllPopups();
       });
 
       observer.observe(documentRef.documentElement, {
@@ -887,31 +1129,11 @@
       });
     }
 
-    function startPopupSweep() {
-      if (
-        popupSweepTimer != null ||
-        typeof windowRef?.setInterval !== 'function'
-      ) {
-        return;
-      }
-      popupSweepTimer = windowRef.setInterval(
-        purgeAllPopups,
-        POPUP_SWEEP_INTERVAL_MS
-      );
-    }
-
-    function stopPopupSweep() {
-      if (popupSweepTimer == null) return;
-      windowRef.clearInterval?.(popupSweepTimer);
-      popupSweepTimer = null;
-    }
-
     function activate(site) {
       targetSite = site;
       setActiveSite(site);
       installDocumentGuards();
       installObserver();
-      startPopupSweep();
       scan(documentRef);
     }
 
@@ -983,7 +1205,9 @@
         windowRef.location?.hostname,
         DEFAULT_HIGH_RISK_DOMAINS
       );
-      if (provisionalSite) activate(provisionalSite);
+      if (provisionalSite) {
+        activate(provisionalSite);
+      }
 
       installStorageListener();
       void refreshConfig();
@@ -1001,6 +1225,7 @@
     function destroy() {
       destroyed = true;
       deactivate();
+
       if (storageListenerInstalled) {
         chromeApi?.storage?.onChanged?.removeListener?.(
           handleStorageChange
@@ -1024,6 +1249,7 @@
     SOURCE_ATTR,
     ACTIVE_ATTR,
     BUTTON_TEXT,
+    POPUP_SWEEP_HOVER_WINDOW_MS,
     DEFAULT_HIGH_RISK_DOMAINS,
     SITE_CONFIGS,
     getTargetSite,
@@ -1031,6 +1257,7 @@
     findDouyinSearchOwner,
     isLikelyDynamicSearchPopup,
     hoistReplacementOutOfOwner,
+    collectObserverBatchPlan,
     createController,
   });
 

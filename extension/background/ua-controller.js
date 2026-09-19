@@ -14,6 +14,7 @@
 
 // 在 Service Worker 中导入配置管理（内联方式，因为 MV3 不支持 importScripts 动态导入）
 // 注意：config.js 的函数需要在 Service Worker 中重新定义
+importScripts(chrome.runtime.getURL('shared/mysearch-navigation.js'));
 
 const STORAGE_KEYS_BG = {
   UA_RULES: 'uaRules',
@@ -25,6 +26,14 @@ const BLOCKING_STORAGE_KEYS_BG = Object.freeze({
   URL_PATTERNS: 'blockedUrlPatterns',
   HIGH_RISK_DOMAINS: 'highRiskDomains',
 });
+const BLOCKING_ENABLED_STORAGE_KEY_BG = 'blockingEnabled';
+// 当前先恢复基础模式：只按明确的关键词/网址规则阻断。
+// 第二套“搜索会话 + 浏览层级”规则待逻辑统一后再重新启用。
+const DEPTH_NAVIGATION_ENFORCEMENT_ENABLED_BG = false;
+const BLOCKING_RUNTIME_ATTR_BG =
+  'data-mysearch-blocking-runtime';
+const BLOCKING_RUNTIME_VERSION_BG =
+  'explicit-rules-switch-v1';
 
 const BLOCKING_STATS_DB_BG = 'MySearchPageBlockingDB';
 const BLOCKING_STATS_DB_VERSION_BG = 1;
@@ -75,6 +84,7 @@ function navigationDomainMatchesBG(hostname, rule) {
 }
 
 function supportsDepthNavigationBG(url, highRiskDomains) {
+  if (DEPTH_NAVIGATION_ENFORCEMENT_ENABLED_BG !== true) return false;
   const hostname = normalizeNavigationHostnameBG(url);
   return SUPPORTED_DEPTH_DOMAINS_BG.some(domain =>
     navigationDomainMatchesBG(hostname, domain)
@@ -86,9 +96,35 @@ function supportsDepthNavigationBG(url, highRiskDomains) {
 function findBlockingSearchMatchBG(keyword, targetUrl, rules) {
   const normalizedKeyword = String(keyword || '').trim();
   const normalizedUrl = String(targetUrl || '');
+  const searchTexts = [normalizedKeyword];
+
+  try {
+    const parsedTargetUrl = new URL(normalizedUrl);
+    const hostname = parsedTargetUrl.hostname.toLowerCase();
+    if (
+      (
+        hostname === 'youtube.com' ||
+        hostname.endsWith('.youtube.com')
+      ) &&
+      parsedTargetUrl.pathname === '/results'
+    ) {
+      const queryText = String(
+        parsedTargetUrl.searchParams.get('search_query') || ''
+      ).trim();
+      if (queryText && !searchTexts.includes(queryText)) {
+        searchTexts.push(queryText);
+      }
+    }
+  } catch (error) {
+    // targetUrl 的完整参数校验由 openSearchResultBG 负责。
+  }
+
   for (const blockedKeyword of rules.blockedKeywords || []) {
     const value = String(blockedKeyword || '');
-    if (value && normalizedKeyword.includes(value)) {
+    if (
+      value &&
+      searchTexts.some(searchText => searchText.includes(value))
+    ) {
       return { kind: 'keyword', value };
     }
   }
@@ -188,6 +224,9 @@ function mutateSearchSessionsBG(operation) {
 }
 
 async function startSearchSessionBG(sender, targetUrl) {
+  if (!(await getBlockingEnabledBG())) {
+    return { enabled: false };
+  }
   const rules = await getBlockingRulesBG();
   if (!supportsDepthNavigationBG(targetUrl, rules.highRiskDomains)) {
     return { enabled: false };
@@ -248,12 +287,15 @@ async function openSearchResultBG(sender, keyword, targetUrl) {
     throw new Error('无法确定搜索标签页');
   }
 
-  const rules = await getBlockingRulesBG();
-  const match = findBlockingSearchMatchBG(
-    normalizedKeyword,
-    parsedUrl.href,
-    rules
-  );
+  const blockingEnabled = await getBlockingEnabledBG();
+  const rules = blockingEnabled ? await getBlockingRulesBG() : null;
+  const match = blockingEnabled
+    ? findBlockingSearchMatchBG(
+      normalizedKeyword,
+      parsedUrl.href,
+      rules
+    )
+    : null;
   if (match) {
     return {
       opened: false,
@@ -262,7 +304,9 @@ async function openSearchResultBG(sender, keyword, targetUrl) {
     };
   }
 
-  const session = await startSearchSessionBG(sender, parsedUrl.href);
+  const session = blockingEnabled
+    ? await startSearchSessionBG(sender, parsedUrl.href)
+    : { enabled: false };
   const tab = await chrome.tabs.create({
     url: parsedUrl.href,
     active: true,
@@ -278,6 +322,10 @@ async function openSearchResultBG(sender, keyword, targetUrl) {
 }
 
 async function getSearchSessionContextBG(sender) {
+  if (
+    DEPTH_NAVIGATION_ENFORCEMENT_ENABLED_BG !== true ||
+    !(await getBlockingEnabledBG())
+  ) return { enabled: false };
   const tabId = sender.tab?.id;
   if (!Number.isInteger(tabId)) return { enabled: false };
   return mutateSearchSessionsBG(state => {
@@ -300,6 +348,10 @@ async function getSearchSessionContextBG(sender) {
 }
 
 async function updateSearchSessionContextBG(sender, message) {
+  if (
+    DEPTH_NAVIGATION_ENFORCEMENT_ENABLED_BG !== true ||
+    !(await getBlockingEnabledBG())
+  ) return { enabled: false };
   const tabId = sender.tab?.id;
   if (!Number.isInteger(tabId)) return { enabled: false };
   return mutateSearchSessionsBG(state => {
@@ -337,6 +389,10 @@ async function updateSearchSessionContextBG(sender, message) {
 }
 
 async function updateSearchSessionForegroundBG(sender, visible) {
+  if (
+    DEPTH_NAVIGATION_ENFORCEMENT_ENABLED_BG !== true ||
+    !(await getBlockingEnabledBG())
+  ) return { enabled: false };
   const tabId = sender.tab?.id;
   if (!Number.isInteger(tabId)) return { enabled: false };
   return mutateSearchSessionsBG(state => {
@@ -392,16 +448,32 @@ async function reconnectSearchMediaTabsBG() {
     typeof chrome.tabs?.query !== 'function' ||
     typeof chrome.scripting?.executeScript !== 'function'
   ) {
-    return { attempted: 0, connected: 0 };
+    return { attempted: 0, connected: 0, reloaded: 0 };
   }
 
   const tabs = await chrome.tabs.query({
     url: SEARCH_MEDIA_TAB_PATTERNS_BG,
   });
   let connected = 0;
+  let reloaded = 0;
   for (const tab of tabs) {
     if (!Number.isInteger(tab.id) || tab.discarded) continue;
     try {
+      const probeResults = await chrome.scripting.executeScript({
+        target: { tabId: tab.id, frameIds: [0] },
+        func: attributeName =>
+          document.documentElement?.getAttribute(attributeName) || '',
+        args: [BLOCKING_RUNTIME_ATTR_BG],
+      });
+      const runtimeVersion = probeResults?.[0]?.result || '';
+      if (
+        runtimeVersion !== BLOCKING_RUNTIME_VERSION_BG &&
+        typeof chrome.tabs?.reload === 'function'
+      ) {
+        await chrome.tabs.reload(tab.id);
+        reloaded += 1;
+        continue;
+      }
       await chrome.scripting.executeScript({
         target: { tabId: tab.id, frameIds: [0] },
         files: SEARCH_MEDIA_SCRIPT_FILES_BG,
@@ -411,16 +483,55 @@ async function reconnectSearchMediaTabsBG() {
       // 正在关闭、未授权或浏览器限制的标签允许跳过。
     }
   }
-  return { attempted: tabs.length, connected };
+  return { attempted: tabs.length, connected, reloaded };
+}
+
+async function injectNativeSearchRedirectTabsBG() {
+  if (
+    typeof chrome.tabs?.query !== 'function' ||
+    typeof chrome.scripting?.executeScript !== 'function'
+  ) {
+    return { attempted: 0, injected: 0 };
+  }
+
+  const tabs = await chrome.tabs.query({});
+  let injected = 0;
+  for (const tab of tabs) {
+    if (
+      !Number.isInteger(tab.id) ||
+      tab.discarded ||
+      !/^https?:\/\//i.test(tab.url || '')
+    ) {
+      continue;
+    }
+
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id, frameIds: [0] },
+        files: ['content/native-search-redirect-runtime.js'],
+      });
+      injected += 1;
+    } catch (error) {
+      // 正在关闭、受限页面或权限暂时不可用的标签允许跳过。
+    }
+  }
+  return { attempted: tabs.length, injected };
 }
 
 chrome.runtime?.onInstalled?.addListener(() => {
   void reconnectSearchMediaTabsBG();
+  void injectNativeSearchRedirectTabsBG();
 });
 
 chrome.runtime?.onStartup?.addListener(() => {
   void reconnectSearchMediaTabsBG();
+  void injectNativeSearchRedirectTabsBG();
 });
+
+// 解压扩展手动重载会重新启动 Service Worker，但不保证旧页面重新
+// 注入 content script。版本探测只决定是否重载标签，不代表开关状态。
+void reconnectSearchMediaTabsBG();
+void injectNativeSearchRedirectTabsBG();
 
 const UA_PRESETS_BG = {
   desktop: {
@@ -692,6 +803,13 @@ async function getUARulesBG() {
 async function getGlobalEnabledBG() {
   const data = await chrome.storage.local.get(STORAGE_KEYS_BG.GLOBAL_ENABLED);
   return data[STORAGE_KEYS_BG.GLOBAL_ENABLED] !== false;
+}
+
+async function getBlockingEnabledBG() {
+  const data = await chrome.storage.local.get(
+    BLOCKING_ENABLED_STORAGE_KEY_BG
+  );
+  return data[BLOCKING_ENABLED_STORAGE_KEY_BG] !== false;
 }
 
 // ============================================
@@ -1038,7 +1156,28 @@ async function handleMessage(message, sender, sendResponse) {
       case 'GET_STATUS': {
         const rules = await getUARulesBG();
         const globalEnabled = await getGlobalEnabledBG();
-        sendResponse({ rules, globalEnabled });
+        const blockingEnabled = await getBlockingEnabledBG();
+        sendResponse({ rules, globalEnabled, blockingEnabled });
+        break;
+      }
+
+      case 'GET_BLOCKING_STATUS': {
+        sendResponse({
+          success: true,
+          enabled: await getBlockingEnabledBG(),
+        });
+        break;
+      }
+
+      case 'OPEN_MYSEARCH_PAGE': {
+        const result = await globalThis.MySearchNavigation?.openMySearchPage(
+          chrome,
+          sender?.tab
+        );
+        sendResponse(result || {
+          success: false,
+          reason: 'MYSEARCH_PAGE_UNAVAILABLE',
+        });
         break;
       }
 
@@ -1157,6 +1296,15 @@ async function handleMessage(message, sender, sendResponse) {
           ));
         }
         sendResponse({ success: true });
+        break;
+      }
+
+      case 'TOGGLE_BLOCKING': {
+        const enabled = message.enabled === true;
+        await chrome.storage.local.set({
+          [BLOCKING_ENABLED_STORAGE_KEY_BG]: enabled,
+        });
+        sendResponse({ success: true, blockingEnabled: enabled });
         break;
       }
 

@@ -12,7 +12,9 @@ const read = relativePath => fs.readFileSync(
 test('替换脚本复用现有全站内容脚本和高风险域名策略', () => {
   const manifest = JSON.parse(read('extension/manifest.json'));
   const entry = manifest.content_scripts.find(item =>
-    item.js?.includes('content/native-search-redirect.js')
+    item.js?.includes(
+      'content/native-search-redirect-runtime.js'
+    )
   );
 
   assert.ok(entry);
@@ -30,7 +32,9 @@ test('替换脚本复用现有全站内容脚本和高风险域名策略', () =>
   assert.match(read('extension/shared/mysearch-navigation.js'), /navigation\/navigation\.html/);
   assert.match(read('extension/background/ua-controller.js'), /OPEN_MYSEARCH_PAGE/);
   assert.match(
-    read('extension/content/native-search-redirect.js'),
+    read(
+      'extension/content/native-search-redirect-runtime.js'
+    ),
     /douyin-owner-with-submit/
   );
   assert.match(

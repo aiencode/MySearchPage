@@ -73,10 +73,12 @@
     {
       domain: 'douyin.com',
       isSearch(url) {
-        return /^\/search(?:\/|$)/.test(url.pathname);
+        // 抖音当前搜索页实际使用 /jingxuan/search/:keyword 路由，
+        // 旧版 /search/:keyword 仍保留兼容。
+        return /^\/(?:jingxuan\/)?search(?:\/|$)/.test(url.pathname);
       },
       roots: '[data-e2e="search-result-container"], [data-e2e="search-results"], [data-e2e="search-result-list"], [data-e2e="search-video-list"], .search-result-list, .search-result-container',
-      cards: '[data-e2e="search-result"], [data-e2e="search-result-item"], [data-e2e="search-video-item"], [data-e2e="search-card"], [data-e2e="search-user-item"], [data-e2e="search-live-item"], [data-e2e="video-card"], [data-e2e="search-result-video"], [data-e2e="search-video-list"] > li, [data-e2e="search-result-list"] > li, .search-result-card, .search-card, .video-card',
+      cards: '[data-e2e="search-result-item"], [data-e2e="search-video-item"], [data-e2e="search-video-card"], [data-e2e="search-card"], [data-e2e="search-user-item"], [data-e2e="search-live-item"], [data-e2e="video-card"], [data-e2e="search-result-video"], [data-e2e="search-video-list"] > li, [data-e2e="search-result-list"] > li, [data-e2e="search-results"] > li, [data-e2e="search-result-container"] > li, [data-e2e*="search-result-item"], [data-e2e*="search-video-item"], [data-e2e*="search-video-card"], [data-e2e*="search-card"], [class*="search-result-item"], [class*="search-card"], [class*="video-card"], [class*="result-item"], .search-result-card, .search-card, .video-card',
       details: `${dialog}, [data-e2e="video-detail"], [data-e2e="video-detail-modal"], [data-e2e="detail-video"], [data-e2e="video-detail-container"], .video-detail-modal`,
       detailOverlays: '[data-e2e="video-detail-modal"], .video-detail-modal',
       boxes: '[data-e2e="video-cover"], [data-e2e="search-video-cover"], [data-e2e="user-avatar"], .video-cover, .cover, .cover-wrapper, .avatar, .avatar-wrapper',

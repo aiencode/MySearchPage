@@ -5,6 +5,8 @@
 document.addEventListener('DOMContentLoaded', () => {
   const globalToggle = document.getElementById('global-toggle');
   const globalStatus = document.getElementById('global-status');
+  const blockingToggle = document.getElementById('blocking-toggle');
+  const blockingStatus = document.getElementById('blocking-status');
   const rulesList = document.getElementById('rules-list');
   const btnImport = document.getElementById('btn-import');
   const btnExport = document.getElementById('btn-export');
@@ -17,10 +19,14 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function init() {
     const response = await sendMessage({ type: 'GET_STATUS' });
-    if (response && response.rules) {
+    if (response) {
       globalToggle.checked = response.globalEnabled;
       updateGlobalStatus(response.globalEnabled);
-      renderRules(response.rules);
+      if (blockingToggle) {
+        blockingToggle.checked = response.blockingEnabled !== false;
+        updateBlockingStatus(response.blockingEnabled !== false);
+      }
+      if (response.rules) renderRules(response.rules);
     }
   }
 
@@ -99,6 +105,26 @@ document.addEventListener('DOMContentLoaded', () => {
   function updateGlobalStatus(enabled) {
     globalStatus.textContent = enabled ? '已启用' : '已禁用';
   }
+
+  function updateBlockingStatus(enabled) {
+    blockingStatus.textContent = enabled ? '已启用' : '已禁用';
+  }
+
+  blockingToggle?.addEventListener('change', async () => {
+    const enabled = blockingToggle.checked;
+    const response = await sendMessage({
+      type: 'TOGGLE_BLOCKING',
+      enabled,
+    });
+    if (response?.success !== true) {
+      blockingToggle.checked = !enabled;
+      updateBlockingStatus(!enabled);
+      showToast('内容拦截开关保存失败');
+      return;
+    }
+    updateBlockingStatus(enabled);
+    showToast(enabled ? '内容拦截已启用' : '内容拦截已禁用');
+  });
 
   // ============================================
   // 导入 / 导出

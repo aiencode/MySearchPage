@@ -6,6 +6,10 @@
 html[data-msp-native-search-active="douyin.com"]
   input[data-e2e="searchbar-input"],
 html[data-msp-native-search-active="douyin.com"]
+  input[data-e2e*="search"],
+html[data-msp-native-search-active="douyin.com"]
+  [data-e2e*="search"] input,
+html[data-msp-native-search-active="douyin.com"]
   [data-e2e="searchbar-button"],
 html[data-msp-native-search-active="douyin.com"]
   [data-e2e="searchbar-container"],
@@ -13,6 +17,7 @@ html[data-msp-native-search-active="douyin.com"]
   [data-e2e="searchbar"],
 html[data-msp-native-search-active="douyin.com"]
   [data-e2e="search-box"] {
+  display: none !important;
   visibility: hidden !important;
   pointer-events: none !important;
 }

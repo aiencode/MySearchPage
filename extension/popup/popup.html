@@ -10,15 +10,27 @@
   <div class="popup-container">
     <!-- 头部 -->
     <header class="popup-header">
-      <h1 class="popup-title">UA Controller</h1>
+      <h1 class="popup-title">MySearchPage</h1>
       <div class="global-toggle">
         <label class="toggle-switch">
           <input type="checkbox" id="global-toggle" checked>
           <span class="toggle-slider"></span>
         </label>
+        <span class="control-label">UA 全局</span>
         <span id="global-status" class="status-text">已启用</span>
       </div>
     </header>
+
+    <section class="blocking-control" aria-label="内容拦截">
+      <div class="blocking-control-info">
+        <span class="control-label">内容拦截</span>
+        <span id="blocking-status" class="status-text">已启用</span>
+      </div>
+      <label class="toggle-switch">
+        <input type="checkbox" id="blocking-toggle" checked>
+        <span class="toggle-slider"></span>
+      </label>
+    </section>
 
     <!-- 规则列表 -->
     <div class="rules-list" id="rules-list">
