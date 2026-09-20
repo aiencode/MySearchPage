@@ -111,6 +111,45 @@
     },
   };
 
+  function disableContinuousPlayback() {
+    const controls = document.querySelectorAll('.continuous-btn');
+    for (const control of controls) {
+      const label = control.querySelector('.txt');
+      if (!/自动连播/.test(label?.textContent || control.textContent || '')) {
+        continue;
+      }
+      const toggle = control.querySelector('.switch-btn');
+      const enabled = toggle?.classList?.contains('on') ||
+        toggle?.getAttribute?.('aria-checked') === 'true';
+      if (enabled) toggle.click();
+    }
+  }
+
+  function installContinuousPlaybackGuard() {
+    const root = document.documentElement;
+    if (!root || typeof MutationObserver !== 'function') {
+      disableContinuousPlayback();
+      return;
+    }
+
+    disableContinuousPlayback();
+    let pending = false;
+    const observer = new MutationObserver(() => {
+      if (pending) return;
+      pending = true;
+      queueMicrotask(() => {
+        pending = false;
+        disableContinuousPlayback();
+      });
+    });
+    observer.observe(root, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['class', 'aria-checked'],
+    });
+  }
+
   /**
    * 简化顶部导航
    */
@@ -160,5 +199,6 @@
     }
   }
 
+  installContinuousPlaybackGuard();
   initializeWhenEnabled();
 })();

@@ -2535,6 +2535,10 @@
 
   function playBeep() {
     try {
+      // AudioContext 只能在用户当前操作期间创建；拦截页面上的被动事件时
+      // 没有这个条件，Chromium 会把创建行为记录为扩展错误。
+      const userActivation = global.navigator?.userActivation;
+      if (!userActivation || userActivation.isActive !== true) return;
       const AudioContextClass = global.AudioContext || global.webkitAudioContext;
       if (!AudioContextClass) return;
       const context = new AudioContextClass();

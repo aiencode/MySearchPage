@@ -4,7 +4,7 @@
     "newtab": "navigation/navigation.html"
   },
   "name": "MySearchPage UA Controller",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "按站点控制 User-Agent，支持桌面UA下手机UI布局",
   "permissions": [
     "storage",
