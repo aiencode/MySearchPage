@@ -108,6 +108,46 @@
           ></ul>
         </div>
       </div>
+      <div class="blocking-keyword-manager">
+        <label for="blocking-urls-batch">批量新增封禁 URL（每行一个）</label>
+        <div class="blocking-keyword-add-row">
+          <textarea
+            id="blocking-urls-batch"
+            rows="2"
+            maxlength="65535"
+            placeholder="每行输入一个 URL 片段"
+          ></textarea>
+          <button
+            id="blocking-urls-add"
+            class="btn btn-sm btn-primary"
+            type="button"
+          >批量新增</button>
+        </div>
+        <div class="blocking-keyword-list-wrap">
+          <strong id="blocking-url-count">全部封禁 URL（0）</strong>
+          <ul id="blocking-url-list" class="blocking-keyword-list" aria-labelledby="blocking-url-count"></ul>
+        </div>
+      </div>
+      <div class="blocking-keyword-manager">
+        <label for="blocking-authors-batch">批量新增封禁作者（每行一个）</label>
+        <div class="blocking-keyword-add-row">
+          <textarea
+            id="blocking-authors-batch"
+            rows="2"
+            maxlength="65535"
+            placeholder="每行输入一个作者名或作者标识"
+          ></textarea>
+          <button
+            id="blocking-authors-add"
+            class="btn btn-sm btn-primary"
+            type="button"
+          >批量新增</button>
+        </div>
+        <div class="blocking-keyword-list-wrap">
+          <strong id="blocking-author-count">全部封禁作者（0）</strong>
+          <ul id="blocking-author-list" class="blocking-keyword-list" aria-labelledby="blocking-author-count"></ul>
+        </div>
+      </div>
       <div class="blocking-stats-grid">
         <table class="blocking-stats-table">
           <thead>

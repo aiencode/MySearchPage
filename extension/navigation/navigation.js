@@ -3217,7 +3217,44 @@
             return mode === SITE_MODES.BOTH || mode === SITE_MODES.NO_BLANK;
         }
 
+        async function isBlockingEnabledForLegacySearch() {
+            try {
+                const response = await new Promise((resolve) => {
+                    chrome.runtime.sendMessage(
+                        { type: 'GET_BLOCKING_STATUS' },
+                        (result) => {
+                            void chrome.runtime.lastError;
+                            resolve(result || null);
+                        }
+                    );
+                });
+                return response?.enabled !== false;
+            } catch (error) {
+                return true;
+            }
+        }
+
         async function openSearchResultWithLegacyBackground(keyword, url) {
+            const blockingEnabled = await isBlockingEnabledForLegacySearch();
+            if (!blockingEnabled) {
+                const currentTab =
+                    typeof chrome.tabs?.getCurrent === 'function'
+                        ? await chrome.tabs.getCurrent()
+                        : null;
+                const createProperties = { url, active: true };
+                if (Number.isInteger(currentTab?.id)) {
+                    createProperties.openerTabId = currentTab.id;
+                }
+                const tab = await chrome.tabs.create(createProperties);
+                return {
+                    success: true,
+                    opened: true,
+                    blocked: false,
+                    sessionEnabled: false,
+                    sessionId: '',
+                    tabId: tab?.id,
+                };
+            }
             const rules = await MySearchBlockingRules.getRulesFromStorage();
             const blockedKeyword = MySearchBlockingRules.findKeyword(
                 keyword,

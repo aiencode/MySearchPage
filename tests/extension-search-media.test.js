@@ -147,12 +147,72 @@ async function harness(t, site, {
   window.addEventListener('unhandledrejection', event => failures.push(event.reason));
   const changed = shared?.changed || createEvent();
   const runtimeMessage = createEvent();
+  const passiveRuntimeReadTypes = new Set([
+    'GET_STATUS',
+    'GET_BLOCKING_RULES',
+    'GET_BLOCKING_STATUS',
+    'GET_BLOCKING_STATS',
+  ]);
+
   function storageResult(keys) {
     if (keys == null) return copy(store);
     if (typeof keys === 'string') return keys in store ? { [keys]: copy(store[keys]) } : {};
     if (Array.isArray(keys)) return Object.fromEntries(keys.filter(key => key in store).map(key => [key, copy(store[key])]));
     return { ...copy(keys), ...Object.fromEntries(Object.keys(keys).filter(key => key in store).map(key => [key, copy(store[key])])) };
   }
+
+  function storedBlockingList(key) {
+    return Array.isArray(store[key])
+      ? copy(store[key])
+      : [];
+  }
+
+  function runtimeReadResponse(message) {
+    switch (message?.type) {
+      case 'GET_STATUS':
+        return {
+          globalEnabled: store.globalEnabled,
+          rules: copy(store.uaRules),
+        };
+
+      case 'GET_BLOCKING_RULES':
+        return {
+          success: true,
+          rules: {
+            blockedKeywords:
+              storedBlockingList('blockedKeywords'),
+            blockedUrlPatterns:
+              storedBlockingList('blockedUrlPatterns'),
+            blockedAuthors:
+              storedBlockingList('blockedAuthors'),
+            highRiskDomains:
+              storedBlockingList('highRiskDomains'),
+          },
+        };
+
+      case 'GET_BLOCKING_STATUS':
+        return {
+          success: true,
+          enabled: store.blockingEnabled !== false,
+        };
+
+      case 'GET_BLOCKING_STATS':
+        return {
+          success: true,
+          stats: {
+            today: {},
+            last7Days: {},
+            last30Days: {
+              feedbackByType: {},
+            },
+          },
+        };
+
+      default:
+        return {};
+    }
+  }
+
   window.chrome = {
     storage: {
       onChanged: changed,
@@ -179,8 +239,14 @@ async function harness(t, site, {
       id: 'search-media-test', onMessage: runtimeMessage,
       getURL: resource => 'chrome-extension://search-media-test/' + resource,
       sendMessage(message, callback) {
-        if (message.type !== 'GET_STATUS') actions.push({ type: 'runtimeMessage', message: copy(message) });
-        const result = message.type === 'GET_STATUS' ? { globalEnabled: store.globalEnabled, rules: copy(store.uaRules) } : {};
+        const messageType = String(message?.type || '');
+        if (!passiveRuntimeReadTypes.has(messageType)) {
+          actions.push({
+            type: 'runtimeMessage',
+            message: copy(message),
+          });
+        }
+        const result = runtimeReadResponse(message);
         if (callback) queueMicrotask(() => callback(result));
         return Promise.resolve(result);
       },
@@ -538,6 +604,108 @@ for (const site of sites) {
     assertSlotsReleased(h);
     assertPaused(h);
   });
+
+  if (site.id === 'douyin') {
+    scenario(
+      'S-09',
+      'feed-active-video 详情根恢复复用结果卡画面且背景继续屏蔽',
+      async t => {
+        const h = await harness(t, site);
+        const results = h.document.querySelector(
+          '[data-test-results]'
+        );
+        const activeCard = results.querySelector(
+          '[data-test-card]'
+        );
+        const activeVideo = activeCard.querySelector(
+          '[data-test-preview]'
+        );
+        const activeMedia = Array.from(
+          activeCard.querySelectorAll('[data-test-media]')
+        );
+        const activeSlot = activeCard.querySelector(
+          '[data-test-media-slot]'
+        );
+
+        const activeCanvas =
+          h.document.createElement('canvas');
+        activeCanvas.setAttribute(
+          'data-test-detail-canvas',
+          ''
+        );
+        activeSlot.appendChild(activeCanvas);
+
+        const backgroundCard = addCard(
+          h,
+          site,
+          'feed-active-background'
+        );
+        await h.settle();
+
+        for (const element of [
+          ...activeMedia,
+          activeCanvas,
+        ]) {
+          assert.equal(
+            visible(h, element),
+            false,
+            'EXECUTION_ERROR: active result media was not ' +
+              'suppressed before entering detail'
+          );
+        }
+
+        const detailRoot =
+          h.document.createElement('section');
+        detailRoot.setAttribute(
+          'data-e2e',
+          'feed-active-video'
+        );
+        detailRoot.setAttribute(
+          'data-aweme-id',
+          '7000000000000000001'
+        );
+
+        activeCard.replaceWith(detailRoot);
+        detailRoot.appendChild(activeCard);
+        await h.settle();
+
+        await activeVideo.play();
+        await h.settle();
+
+        for (const element of [
+          ...activeMedia,
+          activeCanvas,
+        ]) {
+          assert.equal(
+            visible(h, element),
+            true,
+            'BEHAVIOR_FAILURE: feed-active-video detail ' +
+              'visual media remained hidden'
+          );
+        }
+
+        assert.equal(
+          activeVideo.paused,
+          false,
+          'BEHAVIOR_FAILURE: feed-active-video detail ' +
+            'playback was still paused as a result preview'
+        );
+        assert.equal(
+          activeVideo.muted,
+          false,
+          'BEHAVIOR_FAILURE: feed-active-video detail ' +
+            'playback was still muted as a result preview'
+        );
+
+        assertMediaHidden(h, backgroundCard);
+        assertPaused(h, backgroundCard);
+        assertPreserved(
+          h,
+          h.cardSnapshots.get(backgroundCard)
+        );
+      }
+    );
+  }
 
   scenario('S-10', '关闭详情和恢复搜索后复用及新结果继续处理', async t => {
     const h = await harness(t, site);

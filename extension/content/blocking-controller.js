@@ -12,6 +12,7 @@
 
   const BLOCKED_ATTR = 'data-mysearch-blocked';
   const BLOCKED_KEYWORD_ATTR = 'data-mysearch-blocked-keyword';
+  const BLOCKED_AUTHOR_ATTR = 'data-mysearch-blocked-author';
   const BLOCKED_CARD_ATTR = 'data-mysearch-blocked-card';
   const BLOCKED_CARD_KIND_ATTR = 'data-mysearch-blocked-card-kind';
   const BLOCKED_CARD_VALUE_ATTR = 'data-mysearch-blocked-card-value';
@@ -36,10 +37,10 @@
     'data-mysearch-blocking-runtime';
   const BLOCKING_RUNTIME_VERSION =
     'explicit-rules-switch-v1';
-  // 当前先恢复基础模式：只按明确的关键词/网址规则阻断。
+  // 当前先恢复基础模式：只按明确的关键词/网址/作者规则阻断。
   // 第二套“搜索会话 + 浏览层级”规则待逻辑统一后再重新启用。
   const DEPTH_NAVIGATION_ENFORCEMENT_ENABLED = false;
-  const RULE_SCOPES = new Set(['keyword', 'url', 'both']);
+  const RULE_SCOPES = new Set(['keyword', 'url', 'author', 'both']);
   const MAX_RULE_LENGTH = 4096;
   const MAX_SEARCH_URL_LENGTH = 8192;
   const DEPTH2_HIDDEN_ATTR = 'data-mysearch-depth2-hidden';
@@ -101,8 +102,15 @@
         '.search-result-container',
       ],
       details: [
-        '[data-e2e="feed-active-video"][data-aweme-id]',
-        '[data-e2e="video-detail"][data-aweme-id]',
+        // 详情根可能先插入，data-aweme-id 稍后才挂载。
+        // 不能在这段窗口内把详情视觉容器重新当成搜索结果卡片。
+        // 抖音详情采用纵向滑动播放器；预加载的下一个 feed-item
+        // 不一定带有 feed-active-video，但仍属于同一个详情播放器。
+        '[data-e2e="modal-video-container"]',
+        '#slidelist',
+        '[data-e2e="slideList"]',
+        '[data-e2e="feed-item"]',
+        '[data-e2e="feed-active-video"]',
         '[data-e2e="video-detail"]',
         '[data-e2e="modal-video"]',
         '[role="dialog"] video',
@@ -274,6 +282,7 @@
   let feedbackPauseTimer = null;
   let feedbackPauseInterval = null;
   let persistentPageGateMatch = null;
+  let activePageViewKey = '';
   let douyinHistoryContext = '';
 
   const sessionId = global.crypto?.randomUUID?.() || (
@@ -613,6 +622,65 @@
     return [element.textContent || '', ...attributes].filter(Boolean).join('\n');
   }
 
+  function searchMediaAdapterForDomain() {
+    const hostname = domain().toLowerCase().replace(/^www\./, '');
+    return Array.isArray(global.SearchMediaAdapters)
+      ? global.SearchMediaAdapters.find((entry) => {
+        const entryDomain = String(entry?.domain || '')
+          .toLowerCase()
+          .replace(/^www\./, '');
+        return entryDomain && (
+          hostname === entryDomain || hostname.endsWith(`.${entryDomain}`)
+        );
+      })
+      : null;
+  }
+
+  function detailSelectorForAdapter(
+    adapterEntry = depthAdapterEntry()
+  ) {
+    const selectors = [];
+
+    if (Array.isArray(adapterEntry?.details)) {
+      selectors.push(...adapterEntry.details);
+    }
+
+    const mediaAdapter = searchMediaAdapterForDomain();
+    if (
+      typeof mediaAdapter?.details === 'string' &&
+      mediaAdapter.details.trim()
+    ) {
+      selectors.push(mediaAdapter.details);
+    }
+
+    return selectors.filter(Boolean).join(',');
+  }
+
+  function detailRootForElement(
+    element,
+    adapterEntry = depthAdapterEntry()
+  ) {
+    if (!isElement(element)) return null;
+
+    const selector = detailSelectorForAdapter(adapterEntry);
+    if (!selector) return null;
+
+    try {
+      if (element.matches?.(selector)) return element;
+      return element.closest?.(selector) || null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function resultRuleSelectors(adapterEntry, field, fallback) {
+    const adapter = searchMediaAdapterForDomain();
+    const selectors = adapter?.[field];
+    return Array.isArray(selectors) && selectors.length
+      ? selectors
+      : fallback;
+  }
+
   function searchMediaCardSelector(adapterEntry = depthAdapterEntry()) {
     const hostname = domain().toLowerCase().replace(/^www\./, '');
     const mediaAdapter = Array.isArray(global.SearchMediaAdapters)
@@ -896,7 +964,13 @@
   }
 
   function resultCardForElement(element, adapterEntry = depthAdapterEntry()) {
-    if (!isElement(element) || isBlockingFeedbackNode(element)) return null;
+    if (
+      !isElement(element) ||
+      isBlockingFeedbackNode(element) ||
+      detailRootForElement(element, adapterEntry)
+    ) {
+      return null;
+    }
     const blockedAncestor = element.closest?.(`[${BLOCKED_CARD_ATTR}]`);
     if (blockedAncestor) return blockedAncestor;
     const cardSelector = adapterEntry
@@ -906,9 +980,7 @@
       (adapterEntry && fallbackResultCardForElement(element, adapterEntry)) ||
       genericBlockingComponentForElement(element, adapterEntry);
     if (!card || !isVisiblePageElement(card)) return null;
-    if (adapterEntry?.details?.length && card.closest?.(
-      adapterEntry.details.join(',')
-    )) return null;
+    if (detailRootForElement(card, adapterEntry)) return null;
     if (card.closest?.('header, nav, aside, [role="navigation"]') &&
         !card.matches?.(INTERACTIVE_SELECTOR)) return null;
     return card;
@@ -1067,6 +1139,10 @@
     if (!isElement(element)) return [];
     const candidates = [];
     const add = candidate => {
+      const adapter = depthAdapterEntry();
+      if (detailRootForElement(candidate, adapter)) return;
+      const cardSelector = adapter ? searchMediaCardSelector(adapter) : '';
+      if (cardSelector && candidate.closest?.(cardSelector)) return;
       if (isGenericBlockingCandidate(candidate) && !candidates.includes(candidate)) {
         candidates.push(candidate);
       }
@@ -1881,6 +1957,7 @@
       exposureMap.set(node, seen);
       node.setAttribute(BLOCKED_ATTR, '');
       if (match.kind === 'keyword') node.setAttribute(BLOCKED_KEYWORD_ATTR, match.value);
+      if (match.kind === 'author') node.setAttribute(BLOCKED_AUTHOR_ATTR, match.value);
     } else {
       if (pageExposureRecorded.has(key)) return;
       pageExposureRecorded.add(key);
@@ -1892,6 +1969,7 @@
         type: 'exposure',
         keyword: match.kind === 'keyword' ? match.value : '',
         urlPattern: match.kind === 'url' ? match.value : '',
+        author: match.kind === 'author' ? match.value : '',
         domain: domain(),
         timestamp: now(),
         sessionId,
@@ -1913,11 +1991,75 @@
     return null;
   }
 
+  function matchResultCard(card, adapterEntry = depthAdapterEntry()) {
+    if (!isElement(card) || !adapterEntry) return null;
+    const keywordSelectors = resultRuleSelectors(
+      adapterEntry,
+      'keywordSelectors',
+      ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', '[data-title]', '[class*="title"]', '[class*="desc"]']
+    );
+    const authorSelectors = resultRuleSelectors(
+      adapterEntry,
+      'authorSelectors',
+      ['[data-author]', '[data-e2e*="author"]', '[class*="author"]', '[class*="nickname"]', '[class*="user-name"]', 'a[href*="/user/"]', 'a[href*="/channel/"]', 'a[href*="/@"]']
+    );
+    const urlSelectors = resultRuleSelectors(
+      adapterEntry,
+      'urlSelectors',
+      ['a[href]', '[role="link"]', '[data-href]', '[data-url]']
+    );
+    const findTextMatch = (selectors, kind, values) => {
+      for (const selector of selectors) {
+        const nodes = [];
+        if (card.matches?.(selector)) nodes.push(card);
+        nodes.push(...Array.from(card.querySelectorAll?.(selector) || []));
+        for (const node of nodes) {
+          const value = rulesApi.findKeyword(textForElement(node), values);
+          if (value) return { kind, value, element: node };
+        }
+      }
+      return null;
+    };
+    const keyword = findTextMatch(
+      keywordSelectors,
+      'keyword',
+      rules.blockedKeywords
+    );
+    if (keyword) return keyword;
+    const author = findTextMatch(
+      authorSelectors,
+      'author',
+      rules.blockedAuthors
+    );
+    if (author) return author;
+    for (const selector of urlSelectors) {
+      const nodes = [];
+      if (card.matches?.(selector)) nodes.push(card);
+      nodes.push(...Array.from(card.querySelectorAll?.(selector) || []));
+      for (const node of nodes) {
+        const rawUrl = node.getAttribute?.('href') ||
+          node.getAttribute?.('data-href') ||
+          node.getAttribute?.('data-url') || '';
+        const value = findUrlMatch(rawUrl);
+        if (value) return { kind: 'url', value, element: node };
+      }
+    }
+    return null;
+  }
+
   function processElement(element) {
     if (blockingEnabled !== true || !isElement(element)) return;
     const adapter = depthAdapterEntry();
-    for (const card of resultCardsInElement(element, adapter)) {
-      const match = blockedCardMatch(card) || matchElement(card);
+    // MutationObserver 可能直接把详情根、video 或 canvas 放入队列。
+    // 详情范围只允许原站播放器运行，不执行搜索结果卡替换。
+    if (detailRootForElement(element, adapter)) return;
+    const cards = resultCardsInElement(element, adapter);
+    const containingCard = resultCardForElement(element, adapter);
+    if (containingCard && !cards.includes(containingCard)) {
+      cards.push(containingCard);
+    }
+    for (const card of cards) {
+      const match = blockedCardMatch(card) || matchResultCard(card, adapter);
       if (match) processMatchedElement(card, match);
     }
     for (const candidate of blockingCandidatesInElement(element)) {
@@ -1959,6 +2101,18 @@
       global.location.href
     );
     const hasVisibleDetail = hasVisibleDetailRoot(adapter);
+    const nextPageViewKey = pageViewKey(adapter, hasVisibleDetail);
+    const pageViewChanged = Boolean(
+      activePageViewKey &&
+      activePageViewKey !== nextPageViewKey
+    );
+    if (pageViewChanged) {
+      clearFeedbackArtifactsForPageChange();
+      pageExposureRecorded = new Set();
+      exposureMap = new WeakMap();
+      recentAttempts.clear();
+    }
+    activePageViewKey = nextPageViewKey;
     const historyView = douyinHistoryViewState(
       douyinHistoryContext,
       global.location.href,
@@ -1976,9 +2130,9 @@
         global.document.title || '',
         rules.blockedKeywords
       );
-    const nextSearchMatch = findYouTubeSearchKeywordMatch(
-      global.location.href
-    );
+    const nextSearchMatch = onPassiveCollectionPage
+      ? findYouTubeSearchKeywordMatch(global.location.href)
+      : null;
     currentUrlPattern = nextUrlPattern;
     currentTitleKeyword = nextTitleKeyword;
     currentSearchMatch = nextSearchMatch;
@@ -1990,6 +2144,7 @@
     );
     if (shouldClearPersistentPageGate(
       persistentPageGateMatch,
+      nextPageViewKey,
       detectedPageMatch,
       onPassiveCollectionPage,
       hasCurrentContent
@@ -2005,7 +2160,7 @@
     recordExposureForPage(currentSearchMatch);
     renderPageNotice();
     if (rulesLoaded && detectedPageMatch) {
-      latchPersistentPageGate(detectedPageMatch);
+      latchPersistentPageGate(detectedPageMatch, nextPageViewKey);
     }
     if (persistentPageGateMatch) {
       showPersistentPageGateImage();
@@ -2238,17 +2393,39 @@
     return null;
   }
 
+  function pageViewKey(
+    adapterEntry = depthAdapterEntry(),
+    hasVisibleDetail = hasVisibleDetailRoot(adapterEntry)
+  ) {
+    const contentId = hasVisibleDetail
+      ? currentPageContentId()
+      : '';
+    return [
+      normalizeNavigationUrl(global.location.href),
+      hasVisibleDetail
+        ? `detail:${contentId || 'visible'}`
+        : 'page',
+    ].join('|');
+  }
+
+  function ensurePageStateCurrent() {
+    if (blockingEnabled !== true) return;
+    if (pageViewKey() === activePageViewKey) return;
+    updatePageState();
+  }
+
   function shouldClearPersistentPageGate(
     gateMatch,
+    currentViewKey,
     detectedMatch,
     onPassiveCollectionPage,
     hasCurrentContent
   ) {
-    if (
-      !gateMatch ||
-      !onPassiveCollectionPage ||
-      hasCurrentContent
-    ) {
+    if (!gateMatch) return false;
+    if (gateMatch.pageViewKey) {
+      return gateMatch.pageViewKey !== currentViewKey;
+    }
+    if (!onPassiveCollectionPage || hasCurrentContent) {
       return false;
     }
     return !detectedMatch ||
@@ -2256,16 +2433,38 @@
       detectedMatch.value !== gateMatch.value;
   }
 
+  function clearFeedbackArtifactsForPageChange() {
+    finishFeedbackPause();
+    global.clearTimeout?.(showTemporaryNotice.timer);
+    showTemporaryNotice.timer = null;
+    global.clearTimeout?.(flashBlockingFeedback.timer);
+    flashBlockingFeedback.timer = null;
+    global.clearTimeout?.(showBlockingImageFeedback.timer);
+    showBlockingImageFeedback.timer = null;
+    for (const id of [
+      NOTICE_ID,
+      TRANSIENT_FEEDBACK_IMAGE_ID,
+      PERSISTENT_FEEDBACK_IMAGE_ID,
+      FEEDBACK_PAUSE_ID,
+    ]) {
+      global.document?.getElementById?.(id)?.remove?.();
+    }
+    global.document?.documentElement?.classList?.remove?.(
+      'mysearch-blocking-grayout',
+      'mysearch-blocking-feedback-flash'
+    );
+    global.document?.documentElement?.removeAttribute?.(PAGE_GATE_ATTR);
+  }
+
   function clearPersistentPageGate() {
     if (!persistentPageGateMatch) return false;
     persistentPageGateMatch = null;
-    global.document?.getElementById?.(
-      PERSISTENT_FEEDBACK_IMAGE_ID
-    )?.remove?.();
+    clearFeedbackArtifactsForPageChange();
     return true;
   }
 
   function currentPageBlockingMatch() {
+    ensurePageStateCurrent();
     return persistentPageGateMatch ||
       currentSearchMatch ||
       detectedPageBlockingMatch();
@@ -2289,11 +2488,15 @@
     }
   }
 
-  function latchPersistentPageGate(match) {
+  function latchPersistentPageGate(
+    match,
+    currentViewKey = activePageViewKey || pageViewKey()
+  ) {
     if (persistentPageGateMatch || !match) return false;
     persistentPageGateMatch = {
       ...match,
       persistentPageGate: true,
+      pageViewKey: currentViewKey,
     };
     pageIsBlocked = true;
     if (typeof renderPageNotice === 'function') renderPageNotice();
@@ -2307,36 +2510,35 @@
   }
 
   function getInteractionMatch(target) {
+    ensurePageStateCurrent();
+    const pageMatch = currentPageBlockingMatch();
+    if (pageMatch) return pageMatch;
+
+    const adapter = depthAdapterEntry();
+    if (detailRootForElement(target, adapter)) return null;
+
     const blockedCard = isElement(target)
       ? target.closest?.(`[${BLOCKED_CARD_ATTR}]`)
       : null;
     if (blockedCard) {
       return {
-        kind: blockedCard.getAttribute(BLOCKED_CARD_KIND_ATTR) || 'keyword',
-        value: blockedCard.getAttribute(BLOCKED_CARD_VALUE_ATTR) || 'blocked-card',
+        kind:
+          blockedCard.getAttribute(BLOCKED_CARD_KIND_ATTR) ||
+          'keyword',
+        value:
+          blockedCard.getAttribute(BLOCKED_CARD_VALUE_ATTR) ||
+          'blocked-card',
         element: blockedCard,
       };
     }
-    const pageMatch = currentPageBlockingMatch();
-    if (pageMatch) return pageMatch;
 
-    const adapter = depthAdapterEntry();
     const adapterSelector = adapter?.candidates?.join(',');
     const adapterCard = adapterSelector && isElement(target)
       ? target.closest?.(adapterSelector)
       : null;
     if (adapterCard) {
-      const keyword = rulesApi.findKeyword(
-        textForElement(adapterCard),
-        rules.blockedKeywords
-      );
-      if (keyword) {
-        return {
-          kind: 'keyword',
-          value: keyword,
-          element: adapterCard,
-        };
-      }
+      const resultMatch = matchResultCard(adapterCard, adapter);
+      if (resultMatch) return resultMatch;
     }
 
     let element = isElement(target) ? target : target?.parentElement;
@@ -2347,6 +2549,8 @@
       const urlPattern = findUrlMatch(href);
       if (urlPattern) return { kind: 'url', value: urlPattern, element };
       if (isLikelyClickable(element)) {
+        const resultCard = resultCardForElement(element, adapter);
+        if (resultCard && resultCard !== element) continue;
         const keyword = rulesApi.findKeyword(textForElement(element), rules.blockedKeywords);
         if (keyword) return { kind: 'keyword', value: keyword, element };
       }
@@ -2379,6 +2583,7 @@
         type: 'click',
         keyword: match.kind === 'keyword' ? match.value : '',
         urlPattern: match.kind === 'url' ? match.value : '',
+        author: match.kind === 'author' ? match.value : '',
         domain: domain(),
         timestamp,
         sessionId,
@@ -2685,6 +2890,7 @@
   }
 
   function blockPersistentPageEvent(event) {
+    ensurePageStateCurrent();
     if (!persistentPageGateMatch) return false;
     event.preventDefault();
     event.stopPropagation();
@@ -2964,6 +3170,7 @@
     currentUrlPattern = null;
     currentTitleKeyword = null;
     currentSearchMatch = null;
+    activePageViewKey = '';
     douyinHistoryContext = '';
     lastRejectedContentId = '';
     recentAttempts.clear();
@@ -2984,12 +3191,14 @@
     for (const node of Array.from(
       global.document?.querySelectorAll?.(
         `[${BLOCKED_ATTR}], [${BLOCKED_KEYWORD_ATTR}], ` +
+        `[${BLOCKED_AUTHOR_ATTR}], ` +
         `[${BLOCKED_CARD_ATTR}], [${BLOCKED_CARD_KIND_ATTR}], ` +
         `[${BLOCKED_CARD_VALUE_ATTR}]`
       ) || []
     )) {
       node.removeAttribute?.(BLOCKED_ATTR);
       node.removeAttribute?.(BLOCKED_KEYWORD_ATTR);
+      node.removeAttribute?.(BLOCKED_AUTHOR_ATTR);
       node.removeAttribute?.(BLOCKED_CARD_ATTR);
       node.removeAttribute?.(BLOCKED_CARD_KIND_ATTR);
       node.removeAttribute?.(BLOCKED_CARD_VALUE_ATTR);
@@ -3086,6 +3295,7 @@
     }
     if (changes[rulesApi.STORAGE_KEYS.KEYWORDS] ||
       changes[rulesApi.STORAGE_KEYS.URL_PATTERNS] ||
+      changes[rulesApi.STORAGE_KEYS.AUTHORS] ||
       changes[rulesApi.STORAGE_KEYS.HIGH_RISK_DOMAINS]) {
       refreshBlockingRules();
     }

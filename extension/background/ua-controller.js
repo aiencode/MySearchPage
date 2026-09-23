@@ -24,10 +24,11 @@ const STORAGE_KEYS_BG = {
 const BLOCKING_STORAGE_KEYS_BG = Object.freeze({
   KEYWORDS: 'blockedKeywords',
   URL_PATTERNS: 'blockedUrlPatterns',
+  AUTHORS: 'blockedAuthors',
   HIGH_RISK_DOMAINS: 'highRiskDomains',
 });
 const BLOCKING_ENABLED_STORAGE_KEY_BG = 'blockingEnabled';
-// 当前先恢复基础模式：只按明确的关键词/网址规则阻断。
+// 当前先恢复基础模式：只按明确的关键词/网址/作者规则阻断。
 // 第二套“搜索会话 + 浏览层级”规则待逻辑统一后再重新启用。
 const DEPTH_NAVIGATION_ENFORCEMENT_ENABLED_BG = false;
 const BLOCKING_RUNTIME_ATTR_BG =
@@ -848,6 +849,7 @@ async function getBlockingRulesBG() {
   return {
     blockedKeywords: normalizeBlockingListBG(data[BLOCKING_STORAGE_KEYS_BG.KEYWORDS]),
     blockedUrlPatterns: normalizeBlockingListBG(data[BLOCKING_STORAGE_KEYS_BG.URL_PATTERNS]),
+    blockedAuthors: normalizeBlockingListBG(data[BLOCKING_STORAGE_KEYS_BG.AUTHORS]),
     highRiskDomains,
   };
 }
@@ -880,6 +882,10 @@ function normalizeBlockingPolicyBG(value) {
       source.blockedUrlPatterns,
       'blockedUrlPatterns'
     ),
+    blockedAuthors: normalize(
+      source.blockedAuthors,
+      'blockedAuthors'
+    ),
     highRiskDomains: normalize(
       source.highRiskDomains,
       'highRiskDomains'
@@ -899,6 +905,10 @@ async function importBlockingPolicyBG(value) {
       ...current.blockedUrlPatterns,
       ...incoming.blockedUrlPatterns,
     ]),
+    blockedAuthors: normalizeBlockingListBG([
+      ...current.blockedAuthors,
+      ...incoming.blockedAuthors,
+    ]),
     highRiskDomains: normalizeBlockingListBG([
       ...current.highRiskDomains,
       ...incoming.highRiskDomains,
@@ -908,6 +918,7 @@ async function importBlockingPolicyBG(value) {
     [BLOCKING_STORAGE_KEYS_BG.KEYWORDS]: merged.blockedKeywords,
     [BLOCKING_STORAGE_KEYS_BG.URL_PATTERNS]:
       merged.blockedUrlPatterns,
+    [BLOCKING_STORAGE_KEYS_BG.AUTHORS]: merged.blockedAuthors,
     [BLOCKING_STORAGE_KEYS_BG.HIGH_RISK_DOMAINS]:
       merged.highRiskDomains,
   });
@@ -921,15 +932,56 @@ async function exportBlockingPolicyBG() {
   };
 }
 
+async function replaceBlockingRulesBG(value) {
+  const source = value && typeof value === 'object' ? value : {};
+  if (source.schemaVersion !== undefined && source.schemaVersion !== 1) {
+    throw new Error('阻断策略版本不受支持');
+  }
+  const normalizeRequired = (items, label) => {
+    if (!Array.isArray(items)) throw new Error(`${label} 必须是数组`);
+    const normalized = normalizeBlockingListBG(items);
+    if (normalized.some(item => item.length > 4096)) {
+      throw new Error(`${label} 条目过长`);
+    }
+    return normalized;
+  };
+  const next = {
+    blockedKeywords: normalizeRequired(
+      source.blockedKeywords || [],
+      'blockedKeywords'
+    ),
+    blockedUrlPatterns: normalizeRequired(
+      source.blockedUrlPatterns || [],
+      'blockedUrlPatterns'
+    ),
+    blockedAuthors: normalizeRequired(
+      source.blockedAuthors || [],
+      'blockedAuthors'
+    ),
+    highRiskDomains: normalizeRequired(
+      source.highRiskDomains || [],
+      'highRiskDomains'
+    ),
+  };
+  await chrome.storage.local.set({
+    [BLOCKING_STORAGE_KEYS_BG.KEYWORDS]: next.blockedKeywords,
+    [BLOCKING_STORAGE_KEYS_BG.URL_PATTERNS]: next.blockedUrlPatterns,
+    [BLOCKING_STORAGE_KEYS_BG.AUTHORS]: next.blockedAuthors,
+    [BLOCKING_STORAGE_KEYS_BG.HIGH_RISK_DOMAINS]: next.highRiskDomains,
+  });
+  return next;
+}
+
 async function addBlockingRuleBG(value, scope) {
   const normalizedValue = String(value ?? '').trim();
   if (!normalizedValue) throw new Error('阻断规则不能为空');
-  if (!['keyword', 'url', 'both'].includes(scope)) throw new Error('阻断规则类型无效');
+  if (!['keyword', 'url', 'author', 'both'].includes(scope)) throw new Error('阻断规则类型无效');
 
   const current = await getBlockingRulesBG();
   const next = {
     blockedKeywords: [...current.blockedKeywords],
     blockedUrlPatterns: [...current.blockedUrlPatterns],
+    blockedAuthors: [...current.blockedAuthors],
     highRiskDomains: [...current.highRiskDomains],
   };
   if (scope === 'keyword' || scope === 'both') {
@@ -938,9 +990,13 @@ async function addBlockingRuleBG(value, scope) {
   if (scope === 'url' || scope === 'both') {
     if (!next.blockedUrlPatterns.includes(normalizedValue)) next.blockedUrlPatterns.push(normalizedValue);
   }
+  if (scope === 'author') {
+    if (!next.blockedAuthors.includes(normalizedValue)) next.blockedAuthors.push(normalizedValue);
+  }
   await chrome.storage.local.set({
     [BLOCKING_STORAGE_KEYS_BG.KEYWORDS]: next.blockedKeywords,
     [BLOCKING_STORAGE_KEYS_BG.URL_PATTERNS]: next.blockedUrlPatterns,
+    [BLOCKING_STORAGE_KEYS_BG.AUTHORS]: next.blockedAuthors,
     [BLOCKING_STORAGE_KEYS_BG.HIGH_RISK_DOMAINS]: next.highRiskDomains,
   });
   return next;
@@ -989,6 +1045,7 @@ function normalizeBlockingEventBG(event) {
     type,
     keyword: String(source.keyword || '').slice(0, 500),
     urlPattern: String(source.urlPattern || '').slice(0, 500),
+    author: String(source.author || '').slice(0, 500),
     domain: String(source.domain || '').slice(0, 253),
     timestamp: Number.isFinite(source.timestamp) ? source.timestamp : Date.now(),
     sessionId: String(source.sessionId || '').slice(0, 200),
@@ -1188,6 +1245,12 @@ async function handleMessage(message, sender, sendResponse) {
 
       case 'IMPORT_BLOCKING_POLICY': {
         const rules = await importBlockingPolicyBG(message.policy);
+        sendResponse({ success: true, rules });
+        break;
+      }
+
+      case 'UPDATE_BLOCKING_RULES': {
+        const rules = await replaceBlockingRulesBG(message.rules);
         sendResponse({ success: true, rules });
         break;
       }

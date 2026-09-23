@@ -123,15 +123,15 @@
    * 优化视频播放器
    */
   function optimizeVideoPlayer() {
-    // 让视频播放器适应窄屏
+    // 只限制横向溢出。抖音详情播放器的 video/canvas 通常绝对定位，
+    // 强制父级 height:auto 会让真实播放器高度塌陷，形成有声音无画面。
+    // 高度和纵横比必须继续由抖音自身的播放器布局维护。
     const players = document.querySelectorAll(
       '[class*="player"], [class*="video-player"]'
     );
     players.forEach((player) => {
       player.style.width = '100%';
       player.style.maxWidth = '100%';
-      player.style.height = 'auto';
-      player.style.aspectRatio = '9/16';
     });
   }
 

@@ -18,6 +18,9 @@
       overlays: '.bili-video-card__mask, .bili-video-card__stats, .bili-video-card__stats--left, .bili-video-card__stats__duration, .duration, .so-imgTag_rb',
       backgrounds: '.bili-video-card__cover, .bili-video-card__image, .video-cover, .cover, .pic, .face',
       previews: '.bili-video-card__preview, .bili-video-card__preview-container',
+      keywordSelectors: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', '[class*="title"]', '[class*="desc"]', 'a[href*="/video/"]'],
+      authorSelectors: ['[class*="author"]', '[class*="nickname"]', 'a[href*="/space/"]', 'a[href*="/channel/"]', 'a[href*="/user/"]'],
+      urlSelectors: ['a[href]', '[data-href]', '[data-url]'],
       layout: [
         { selector: '.bili-video-card__skeleton', emptyOnly: true, styles: { display: 'none' } },
         {
@@ -43,6 +46,9 @@
       overlays: 'ytd-thumbnail-overlay-time-status-renderer, ytd-thumbnail-overlay-bottom-panel-renderer, ytm-thumbnail-overlay-time-status-renderer, .thumbnail-overlay, .video-thumbnail-overlay, .video-thumbnail-overlay-time-status, .yt-thumbnail-overlay-badge-view-model',
       backgrounds: '.video-thumbnail-bg, .video-thumbnail-img, .ytThumbnailViewModelImage, #thumbnail, #avatar',
       previews: 'ytd-video-preview, ytm-video-preview, #video-preview',
+      keywordSelectors: ['#video-title', 'a#video-title', 'h1', 'h2', 'h3', '[class*="title"]', 'yt-formatted-string'],
+      authorSelectors: ['#channel-name', '[class*="author"]', '[class*="owner"]', 'a[href*="/channel/"]', 'a[href*="/@"]', 'a[href*="/user/"]'],
+      urlSelectors: ['a[href]', '[data-href]', '[data-url]'],
       routeEvents: ['yt-navigate-finish', 'yt-page-data-updated'],
     },
     {
@@ -58,6 +64,9 @@
       overlays: '.cover .bottom, .cover .top, .cover .duration, .cover .badge, .cover .pinned, .cover .note-status, .cover .video-duration',
       backgrounds: '.cover, .note-cover, .author-avatar, .avatar',
       previews: '.note-item-preview',
+      keywordSelectors: ['h1', 'h2', 'h3', 'p', '[class*="title"]', '[class*="desc"]', 'a[href*="/explore/"]', 'a[href*="/discovery/item/"]'],
+      authorSelectors: ['[class*="author"]', '[class*="nickname"]', 'a[href*="/user/"]'],
+      urlSelectors: ['a[href]', '[data-href]', '[data-url]'],
       flowRoot: '.feeds-container',
       cardLayout: {
         position: 'relative', top: 'auto', right: 'auto', bottom: 'auto', left: 'auto',
@@ -79,12 +88,17 @@
       },
       roots: '[data-e2e="search-result-container"], [data-e2e="search-results"], [data-e2e="search-result-list"], [data-e2e="search-video-list"], .search-result-list, .search-result-container',
       cards: '[data-e2e="search-result-item"], [data-e2e="search-video-item"], [data-e2e="search-video-card"], [data-e2e="search-card"], [data-e2e="search-user-item"], [data-e2e="search-live-item"], [data-e2e="video-card"], [data-e2e="search-result-video"], [data-e2e="search-video-list"] > li, [data-e2e="search-result-list"] > li, [data-e2e="search-results"] > li, [data-e2e="search-result-container"] > li, [data-e2e*="search-result-item"], [data-e2e*="search-video-item"], [data-e2e*="search-video-card"], [data-e2e*="search-card"], [class*="search-result-item"], [class*="search-card"], [class*="video-card"], [class*="result-item"], .search-result-card, .search-card, .video-card',
-      details: `${dialog}, [data-e2e="video-detail"], [data-e2e="video-detail-modal"], [data-e2e="detail-video"], [data-e2e="video-detail-container"], .video-detail-modal`,
+      // 详情是纵向滑动播放器；#slidelist/feed-item 还包含尚未显示的
+      // 预加载视频，不能把其中的控制文字当成搜索结果规则候选。
+      details: `${dialog}, [data-e2e="modal-video-container"], #slidelist, [data-e2e="slideList"], [data-e2e="feed-item"], [data-e2e="feed-active-video"], [data-e2e="video-detail"], [data-e2e="video-detail-modal"], [data-e2e="detail-video"], [data-e2e="video-detail-container"], .video-detail-modal`,
       detailOverlays: '[data-e2e="video-detail-modal"], .video-detail-modal',
       boxes: '[data-e2e="video-cover"], [data-e2e="search-video-cover"], [data-e2e="user-avatar"], .video-cover, .cover, .cover-wrapper, .avatar, .avatar-wrapper',
       overlays: '[data-e2e="video-duration"], [data-e2e="video-stats"], .video-duration, .duration, .cover .stats, .cover .badge',
       backgrounds: '[data-e2e="video-cover"], [data-e2e="user-avatar"], .video-cover, .cover, .avatar',
       previews: '[data-e2e="search-result-preview"], [data-e2e="search-video-preview"], [data-e2e="search-preview"]',
+      keywordSelectors: ['h1', 'h2', 'h3', 'p', '[data-e2e*="title"]', '[class*="title"]', '[class*="desc"]', 'a[href*="/video/"]'],
+      authorSelectors: ['[data-author]', '[data-e2e*="author"]', '[class*="author"]', '[class*="nickname"]', 'a[href*="/user/"]', 'a[href*="/channel/"]'],
+      urlSelectors: ['a[href]', '[data-href]', '[data-url]'],
       routeEvents: [],
     },
   ];

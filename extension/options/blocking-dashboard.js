@@ -16,10 +16,18 @@
     document.getElementById('blocking-keywords-batch');
   const keywordAddButton =
     document.getElementById('blocking-keywords-add');
+  const urlInput = document.getElementById('blocking-urls-batch');
+  const urlAddButton = document.getElementById('blocking-urls-add');
+  const authorInput = document.getElementById('blocking-authors-batch');
+  const authorAddButton = document.getElementById('blocking-authors-add');
   const keywordCount =
     document.getElementById('blocking-keyword-count');
   const keywordList =
     document.getElementById('blocking-keyword-list');
+  const urlCount = document.getElementById('blocking-url-count');
+  const urlList = document.getElementById('blocking-url-list');
+  const authorCount = document.getElementById('blocking-author-count');
+  const authorList = document.getElementById('blocking-author-list');
   if (
     !periods ||
     !feedback ||
@@ -28,6 +36,14 @@
     !keywordAddButton ||
     !keywordCount ||
     !keywordList ||
+    !urlInput ||
+    !urlAddButton ||
+    !authorInput ||
+    !authorAddButton ||
+    !urlCount ||
+    !urlList ||
+    !authorCount ||
+    !authorList ||
     !rulesApi
   ) return;
 
@@ -87,6 +103,26 @@
     }
   }
 
+  async function replaceBlockingRules(rules) {
+    try {
+      return await sendMessage({
+        type: 'UPDATE_BLOCKING_RULES',
+        rules: { schemaVersion: 1, ...rules },
+      });
+    } catch (error) {
+      if (!rulesApi.isUnknownMessageResponse(
+        error.response,
+        'UPDATE_BLOCKING_RULES'
+      )) {
+        throw error;
+      }
+      return {
+        success: true,
+        rules: await rulesApi.replaceRulesInStorage(rules),
+      };
+    }
+  }
+
   function appendCell(row, value) {
     const cell = document.createElement('td');
     cell.textContent = String(value);
@@ -106,22 +142,94 @@
     ));
   }
 
-  function renderBlockingKeywords(rules) {
-    const keywords = Array.isArray(rules?.blockedKeywords)
-      ? rules.blockedKeywords
-      : [];
-    keywordCount.textContent = `全部封禁词（${keywords.length}）`;
-    keywordList.textContent = '';
-    for (const keyword of keywords) {
+  function renderRuleList(list, count, values, emptyLabel, field) {
+    const items = Array.isArray(values) ? values : [];
+    count.textContent = `${emptyLabel}（${items.length}）`;
+    list.textContent = '';
+    for (const value of items) {
       const item = document.createElement('li');
-      item.textContent = keyword;
-      keywordList.appendChild(item);
+      const input = document.createElement('input');
+      input.className = 'blocking-rule-value';
+      input.type = 'text';
+      input.value = value;
+      input.setAttribute('aria-label', `${emptyLabel}：${value}`);
+      const actions = document.createElement('span');
+      actions.className = 'blocking-rule-actions';
+      const save = document.createElement('button');
+      save.type = 'button';
+      save.textContent = '保存';
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = '删除';
+      save.addEventListener('click', async () => {
+        const nextValue = input.value.trim();
+        if (!nextValue) {
+          status.textContent = `${emptyLabel}不能为空`;
+          input.focus();
+          return;
+        }
+        try {
+          const response = await getBlockingRules();
+          const next = { ...response.rules };
+          next[field] = Array.from(new Set(
+            (next[field] || []).map(item => item === value ? nextValue : item)
+          ));
+          const saved = await replaceBlockingRules(next);
+          renderBlockingRuleSets(saved.rules);
+          status.textContent = `${emptyLabel}已保存`;
+        } catch (error) {
+          status.textContent = `${emptyLabel}保存失败：${error.message}`;
+        }
+      });
+      remove.addEventListener('click', async () => {
+        try {
+          const response = await getBlockingRules();
+          const next = { ...response.rules };
+          next[field] = (next[field] || []).filter(item => item !== value);
+          const saved = await replaceBlockingRules(next);
+          renderBlockingRuleSets(saved.rules);
+          status.textContent = `${emptyLabel}已删除`;
+        } catch (error) {
+          status.textContent = `${emptyLabel}删除失败：${error.message}`;
+        }
+      });
+      actions.append(save, remove);
+      item.append(input, actions);
+      list.appendChild(item);
     }
+  }
+
+  function renderBlockingKeywords(rules) {
+    renderRuleList(
+      keywordList,
+      keywordCount,
+      rules?.blockedKeywords,
+      '全部封禁词',
+      'blockedKeywords'
+    );
+  }
+
+  function renderBlockingRuleSets(rules) {
+    renderBlockingKeywords(rules);
+    renderRuleList(
+      urlList,
+      urlCount,
+      rules?.blockedUrlPatterns,
+      '全部封禁 URL',
+      'blockedUrlPatterns'
+    );
+    renderRuleList(
+      authorList,
+      authorCount,
+      rules?.blockedAuthors,
+      '全部封禁作者',
+      'blockedAuthors'
+    );
   }
 
   async function refreshBlockingKeywords() {
     const response = await getBlockingRules();
-    renderBlockingKeywords(response.rules);
+    renderBlockingRuleSets(response.rules);
   }
 
   function renderStats(stats) {
@@ -192,31 +300,48 @@
   refreshButton.addEventListener('click', refreshStats);
   importButton.addEventListener('click', () => policyFile.click());
 
-  keywordAddButton.addEventListener('click', async () => {
-    const keywords = parseBlockingKeywordBatch(keywordInput.value);
-    if (!keywords.length) {
-      status.textContent = '请至少输入一个封禁词';
-      keywordInput.focus();
+  async function appendRules(input, button, field, label) {
+    const values = parseBlockingKeywordBatch(input.value);
+    if (!values.length) {
+      status.textContent = `请至少输入一个${label}`;
+      input.focus();
       return;
     }
-
-    keywordAddButton.disabled = true;
-    status.textContent = '正在追加封禁词';
+    button.disabled = true;
+    status.textContent = `正在追加${label}`;
     try {
       const response = await importBlockingPolicy({
         schemaVersion: 1,
-        blockedKeywords: keywords,
+        [field]: values,
       });
-      renderBlockingKeywords(response.rules);
-      keywordInput.value = '';
-      status.textContent =
-        `已追加 ${keywords.length} 个封禁词；原有规则未删除`;
+      renderBlockingRuleSets(response.rules);
+      input.value = '';
+      status.textContent = `已追加 ${values.length} 个${label}；原有规则未删除`;
     } catch (error) {
-      status.textContent = `封禁词追加失败：${error.message}`;
+      status.textContent = `${label}追加失败：${error.message}`;
     } finally {
-      keywordAddButton.disabled = false;
+      button.disabled = false;
     }
-  });
+  }
+
+  keywordAddButton.addEventListener('click', () => appendRules(
+    keywordInput,
+    keywordAddButton,
+    'blockedKeywords',
+    '封禁词'
+  ));
+  urlAddButton.addEventListener('click', () => appendRules(
+    urlInput,
+    urlAddButton,
+    'blockedUrlPatterns',
+    '封禁 URL'
+  ));
+  authorAddButton.addEventListener('click', () => appendRules(
+    authorInput,
+    authorAddButton,
+    'blockedAuthors',
+    '封禁作者'
+  ));
 
   policyFile.addEventListener('change', async () => {
     const file = policyFile.files?.[0];
@@ -225,7 +350,7 @@
     try {
       const policy = JSON.parse(await file.text());
       const response = await importBlockingPolicy(policy);
-      renderBlockingKeywords(response.rules);
+      renderBlockingRuleSets(response.rules);
       status.textContent = '策略已追加；原有规则未删除';
     } catch (error) {
       status.textContent = `策略导入失败：${error.message}`;
