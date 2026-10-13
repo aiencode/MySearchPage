@@ -811,6 +811,20 @@
       .trim();
   }
 
+  function isBlockingPageContainer(element, adapterEntry = depthAdapterEntry()) {
+    if (!isElement(element)) return false;
+    if (element === global.document?.documentElement || element === global.document?.head ||
+        element === global.document?.body) return true;
+    if (element.matches?.('html, head, body, main, header, nav, aside, [role="main"], [role="navigation"], ' +
+        '#app, #root, #__next, [data-v-app]')) return true;
+    const rootSelector = searchMediaRootSelector(adapterEntry);
+    if (rootSelector && (element.matches?.(rootSelector) || element.querySelector?.(rootSelector))) return true;
+    if (element.querySelector?.('main, [role="main"], nav, aside, [role="navigation"]')) return true;
+    // 小红书首屏尚未挂载 feeds-container 时，应用/搜索布局仍不是卡片。
+    if (adapterEntry?.name === 'xiaohongshu' && element.matches?.('.search-layout, .search-page')) return true;
+    return false;
+  }
+
   function isCompactTextComponent(element) {
     if (!isElement(element) || isBlockingFeedbackNode(element)) return false;
     const tagName = String(element.tagName || '').toUpperCase();
@@ -830,13 +844,15 @@
   }
 
   function isGenericBlockingCandidate(element) {
-    if (!isElement(element) || isBlockingFeedbackNode(element)) return false;
+    if (!isElement(element) || isBlockingFeedbackNode(element) || isBlockingPageContainer(element)) return false;
     if (element.matches?.(CANDIDATE_SELECTOR)) return true;
     return isCompactTextComponent(element);
   }
 
   function genericResultCardForElement(element, adapterEntry) {
     if (!isElement(element) || isBlockingFeedbackNode(element)) return null;
+    // 小红书导航图标和空页面壳也具备媒体/链接形状，不能向上猜卡片。
+    if (adapterEntry?.name === 'xiaohongshu') return null;
 
     const rootSelector = adapterEntry
       ? searchMediaRootSelector(adapterEntry)
@@ -853,6 +869,7 @@
       if (details && current.closest?.(details)) break;
       if (current.closest?.('header, nav, aside, [role="navigation"]') &&
           !current.matches?.(INTERACTIVE_SELECTOR)) break;
+      if (isBlockingPageContainer(current, adapterEntry)) break;
       if (current === pageRoot || current === global.document?.documentElement) {
         break;
       }
@@ -884,6 +901,10 @@
   function genericBlockingComponentForElement(element, adapterEntry) {
     if (!isElement(element) || isBlockingFeedbackNode(element)) return null;
     if (element.matches?.(MEDIA_SELECTOR)) return element;
+    if (adapterEntry?.name === 'xiaohongshu') {
+      if (isBlockingPageContainer(element, adapterEntry)) return null;
+      return element.matches?.(INTERACTIVE_SELECTOR) || isCompactTextComponent(element) ? element : null;
+    }
     const card = genericResultCardForElement(element, adapterEntry);
     if (card && card !== global.document?.body &&
         card !== global.document?.documentElement) {
@@ -893,6 +914,7 @@
     let current = element;
     for (let depth = 0; current && depth < 10; depth += 1) {
       if (!isElement(current) || isBlockingFeedbackNode(current)) break;
+      if (isBlockingPageContainer(current, adapterEntry)) break;
       if (current === global.document?.body ||
           current === global.document?.documentElement) break;
       if (current.matches?.(INTERACTIVE_SELECTOR)) return current;
@@ -938,6 +960,7 @@
     let current = element;
     while (current && current !== root) {
       if (!isElement(current)) break;
+      if (isBlockingPageContainer(current, adapterEntry)) break;
       const dataE2e = current.getAttribute?.('data-e2e') || '';
       const className = typeof current.className === 'string'
         ? current.className
@@ -981,6 +1004,7 @@
       genericBlockingComponentForElement(element, adapterEntry);
     if (!card || !isVisiblePageElement(card)) return null;
     if (detailRootForElement(card, adapterEntry)) return null;
+    if (isBlockingPageContainer(card, adapterEntry)) return null;
     if (card.closest?.('header, nav, aside, [role="navigation"]') &&
         !card.matches?.(INTERACTIVE_SELECTOR)) return null;
     return card;
@@ -1012,7 +1036,7 @@
   }
 
   function hideBlockedCard(card, match) {
-    if (!isElement(card) || !match) return false;
+    if (!isElement(card) || !match || isBlockingPageContainer(card)) return false;
     const existing = blockedCardStates.get(card);
     if (existing) {
       if (existing.leaf) {
@@ -1978,7 +2002,8 @@
   }
 
   function matchElement(element) {
-    if (!isElement(element) || isBlockingFeedbackNode(element)) return null;
+    if (!isElement(element) || isBlockingFeedbackNode(element) ||
+        isBlockingPageContainer(element)) return null;
     const keyword = rulesApi.findKeyword(textForElement(element), rules.blockedKeywords);
     if (keyword) return { kind: 'keyword', value: keyword, element };
     const target = element.matches(
