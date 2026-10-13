@@ -10,3 +10,12 @@
 
 
 本轮日志与本地浏览器证据保留在 `E:/Users/can/.codex/artifacts/mysearchpage-search-media-20260906/`，主要文件为 `full-validation.log`、`full-validation.evidence.json`、`legacy-vm-full-final.log`、`legacy-vm-full-final.evidence.json` 和 `offline-browser-validation.json`。本地工具链路径不属于产品运行依赖。
+
+
+## 抖音详情挂载点误删修复复核
+
+- 在授权的现有 Chrome 中复现：首条详情正常，点 × 关闭后再开，URL 有 `modal_id`、body 保持滚动锁但页面无视频节点；媒体隐藏开关关闭。
+- 临时删除调用取证确认 `replaceOwner → scan → MutationObserver` 替换无标识搜索祖先。节点替换时媒体数为 0，脱离文档后却继续挂载搜索 feed、`data-e2e="modal-video-container"` 和 3 个媒体节点，确认根因为详情 portal 复用挂载点被误删。
+- 加入 `canExpandDouyinSearchOwner` 的明确搜索 owner 标识边界后，真实页面连续打开/点 × 关闭四轮均显示详情并播放，最后正常返回列表。范围仅为当时抖音页面、媒体隐藏关闭，不泛化到所有结构或其他站点。
+- 串行分组回归通过 171 项：媒体核心 100、媒体设置 16、搜索替换/拦截/manifest/播放器 55。另有新增四轮 portal 离线浏览器回归及既有返回浏览器回归通过；后者仅为本地测试 HTTP→HTTPS 升级使用 scratch 临时路由适配，原测试未修改。
+- 临时取证代码已移除。分组日志保留在会话 scratch：`douyin-portal-media-core.log`、`douyin-portal-media-settings.log`、`douyin-portal-other-unit.log`、`native-search-portal-browser.log`、`douyin-portal-native-return-adapted.log`。

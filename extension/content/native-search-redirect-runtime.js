@@ -430,6 +430,12 @@
       return false;
     }
 
+    // Unmarked wrappers may be React portal hosts, even while they contain
+    // only search controls. Never detach them based on absent controls alone.
+    if (!matchesAnySelector(candidate, targetSite?.ownerSelectors)) {
+      return false;
+    }
+
     if (
       !targetSite?.submitSelector ||
       !safeQuery(candidate, targetSite.submitSelector) ||

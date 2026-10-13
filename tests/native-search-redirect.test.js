@@ -72,7 +72,7 @@ test('Douyin 没有原生 submit 时不退化为只替换 input', () => {
   );
 });
 
-test('Douyin 提升到完整视觉 shell，但不会吞掉无关顶部控件', () => {
+test('Douyin 仅提升到明确搜索 shell，保留无标识的未来详情挂载点', () => {
   const selectorParts = selector =>
     String(selector || '')
       .split(',')
@@ -209,8 +209,11 @@ test('Douyin 提升到完整视觉 shell，但不会吞掉无关顶部控件', (
 
   assert.equal(
     redirect.findDouyinSearchOwner(input, site),
-    visualShell
+    innerOwner
   );
+  // A stable search marker supplies positive ownership evidence.
+  visualShell.matches = selector => selector === '[data-e2e="searchbar-container"]';
+  assert.equal(redirect.findDouyinSearchOwner(input, site), visualShell);
 });
 
 test('Douyin 原生搜索 CSS 使用 display none，不再保留占位', () => {
