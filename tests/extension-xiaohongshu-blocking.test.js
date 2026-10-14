@@ -7,9 +7,9 @@ const { JSDOM } = require(process.env.MYSEARCHPAGE_JSDOM_MODULE || 'jsdom');
 const root = path.resolve(__dirname, '..');
 const read = file => fs.readFileSync(path.join(root, file), 'utf8');
 
-async function harness(t, markup, keyword = 'picot', blockedKeywords = []) {
+async function harness(t, markup, keyword = 'picot', blockedKeywords = [], overrides = {}) {
   const dom = new JSDOM(`<!doctype html><html><head><title>${keyword} - 小红书搜索</title></head><body>${markup}</body></html>`, {
-    url: `https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(keyword)}&type=51`, runScripts: 'outside-only', pretendToBeVisual: true,
+    url: `https://www.xiaohongshu.com/search_result/?keyword=${encodeURIComponent(keyword)}&type=51`, runScripts: 'outside-only', pretendToBeVisual: true,
   });
   const window = dom.window;
   window.chrome = {
@@ -17,6 +17,7 @@ async function harness(t, markup, keyword = 'picot', blockedKeywords = []) {
       callback?.(message.type === 'GET_BLOCKING_RULES' ? { success: true, rules: {
         blockedKeywords, blockedUrlPatterns: [], blockedAuthors: [], highRiskDomains: ['xiaohongshu.com'],
         homepageRules: { 'xiaohongshu.com': { allowHomepage: false } },
+        ...overrides,
       } } : { success: true, enabled: true });
     } },
     storage: { onChanged: { addListener() {} } },
@@ -25,6 +26,7 @@ async function harness(t, markup, keyword = 'picot', blockedKeywords = []) {
   window.eval(read('extension/content/search-media-adapters.js'));
   let source = read('extension/content/blocking-controller.js');
   // Test-only inspection of production component-selection functions.
+  assert.equal(source.split('  init();').length, 2, 'test hook must target exactly one production init call');
   source = source.replace('  init();', '  global.testBlocking = { resultCardForElement, hideBlockedCard };\n  init();');
   window.eval(source);
   t.after(() => window.close());
@@ -73,4 +75,61 @@ test('Xiaohongshu inner non-semantic shell must not become a card before any res
   const w = await harness(t, '<div id="app"><div class="container" id="inner-shell"><a href="/explore"><svg></svg><span>发现</span></a><div id="pending-results"></div></div></div>');
   assert.ok(w.document.querySelector('#pending-results'));
   assert.equal(w.document.querySelector('#inner-shell').hasAttribute('data-mysearch-blocked-card'), false);
+});
+
+test('TC-REG-XHS-002 deeply nested untyped shells cannot be promoted from a homepage icon', async t => {
+  const w = await harness(t, '<div id="shell"><div id="inner"><div id="leaf-shell">' +
+    '<a id="home" href="/explore"><svg></svg><span>发现</span></a>' +
+    '<div id="pending"></div></div></div></div>');
+  assert.ok(w.document.querySelector('#pending'), 'results mounting point survives before any named search root exists');
+  for (const id of ['shell', 'inner', 'leaf-shell']) {
+    assert.equal(w.document.getElementById(id).hasAttribute('data-mysearch-blocked-card'), false);
+  }
+  assert.equal(w.testBlocking.resultCardForElement(w.document.getElementById('home'))?.id, 'home',
+    'a navigation match may select itself, never a parent shell');
+});
+
+for (const [kind, overrides, content] of [
+  ['keyword', { blockedKeywords: ['BLOCKME'] }, '<h2>BLOCKME 笔记</h2>'],
+  ['url', { blockedUrlPatterns: ['/explore/blocked-note'] }, '<h2>普通标题</h2>'],
+  ['author', { blockedAuthors: ['BLOCKAUTHOR'] }, '<h2>普通标题</h2><span class="author">BLOCKAUTHOR</span>'],
+]) {
+  test(`TC-REG-XHS-003 ${kind} match replaces only its note and removes its actionable targets`, async t => {
+    const w = await harness(t, '<div id="app"><main><div class="feeds-container" id="results">' +
+      `<section class="note-item" id="blocked"><a href="/explore/blocked-note">${content}<img alt="封面"></a></section>` +
+      '<section class="note-item" id="safe"><a href="/explore/safe-note"><h2>普通资料</h2><img></a></section>' +
+      '</div></main></div>', 'picot', [], overrides);
+    const blocked = w.document.getElementById('blocked');
+    assert.equal(blocked.getAttribute('data-mysearch-blocked-card-kind'), kind);
+    assert.equal(blocked.querySelectorAll('.mysearch-blocked-card-placeholder').length, 1);
+    assert.equal(blocked.querySelectorAll('a[href], h2, img, .author').length, 0,
+      'original title, media, author and clickable note targets must be removed');
+    assert.equal(w.document.querySelector('#safe a')?.getAttribute('href'), '/explore/safe-note');
+    assert.equal(w.document.querySelector('#safe h2')?.textContent, '普通资料');
+    assert.equal(w.document.getElementById('results').hasAttribute('data-mysearch-blocked-card'), false);
+    assert.equal(w.document.documentElement.hasAttribute('data-mysearch-page-gate'), false);
+  });
+}
+
+test('TC-REG-XHS-004 subsequent result batches preserve previous safe notes and keep placeholders local', async t => {
+  const w = await harness(t, '<div id="app"><div class="search-layout"><div class="feeds-container" id="results"></div></div></div>',
+    'picot', ['BLOCKME']);
+  const results = w.document.getElementById('results');
+  for (let batch = 1; batch <= 3; batch++) {
+    results.insertAdjacentHTML('beforeend',
+      `<section class="note-item" id="safe-${batch}"><a href="/explore/safe-${batch}"><h2>普通资料 ${batch}</h2><img></a></section>` +
+      `<section class="note-item" id="blocked-${batch}"><a href="/explore/blocked-${batch}"><h2>BLOCKME ${batch}</h2><img></a></section>`);
+    const deadline = Date.now() + 1000;
+    while (!w.document.querySelector(`#blocked-${batch} .mysearch-blocked-card-placeholder`) && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(results.querySelectorAll('.mysearch-blocked-card-placeholder').length, batch);
+    for (let previous = 1; previous <= batch; previous++) {
+      assert.equal(results.querySelector(`#safe-${previous} h2`)?.textContent, `普通资料 ${previous}`);
+      assert.ok(results.querySelector(`#safe-${previous} a[href="/explore/safe-${previous}"]`));
+      assert.equal(results.querySelector(`#blocked-${previous} a[href]`), null);
+    }
+    assert.equal(results.hasAttribute('data-mysearch-blocked-card'), false);
+    assert.equal(w.document.getElementById('app').hasAttribute('data-mysearch-blocked-card'), false);
+  }
 });
