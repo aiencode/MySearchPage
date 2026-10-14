@@ -4,7 +4,7 @@
     "newtab": "navigation/navigation.html"
   },
   "name": "MySearchPage UA Controller",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "按站点控制 User-Agent，支持桌面UA下手机UI布局",
   "permissions": [
     "storage",
@@ -67,7 +67,8 @@
         "*://*.youtube.com/*",
         "*://*.xiaohongshu.com/*",
         "*://*.google.com/*",
-        "*://*.google.com.hk/*"
+        "*://*.google.com.hk/*",
+        "*://*.bing.com/*"
       ],
       "css": ["content/styles/native-search-redirect.css"],
       "run_at": "document_start"

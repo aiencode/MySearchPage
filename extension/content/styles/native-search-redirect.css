@@ -74,6 +74,25 @@ html[data-msp-native-search-active="xiaohongshu.com"]
   pointer-events: none !important;
 }
 
+/* 小红书原生建议与折叠搜索按钮：返回旧页时也禁止再显现。 */
+html[data-msp-native-search-active="xiaohongshu.com"] .sug-pad,
+html[data-msp-native-search-active="xiaohongshu.com"] header .input-button,
+html[data-msp-native-search-active="xiaohongshu.com"] .header-container .input-button,
+html[data-msp-native-search-active="xiaohongshu.com"] header .min-width-search-icon,
+html[data-msp-native-search-active="xiaohongshu.com"] .header-container .min-width-search-icon {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
+/* 必应建议层仅在替换入口激活时隐藏；原生输入保持可测量以供识别。 */
+html[data-msp-native-search-active="bing.com"] #sw_as,
+html[data-msp-native-search-active="bing.com"] #sa_ul {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+
 [data-msp-native-search-root="true"] {
   --msp-search-width: min(420px, 28vw);
   --msp-search-min-width: 104px;
@@ -84,6 +103,15 @@ html[data-msp-native-search-active="xiaohongshu.com"]
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
+  padding: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}
+
+[data-msp-native-search-root="true"]:not([data-msp-native-search-layout="preserve"]) {
   width: auto !important;
   position: relative !important;
   z-index: 1 !important;
@@ -91,12 +119,29 @@ html[data-msp-native-search-active="xiaohongshu.com"]
   min-width: 104px !important;
   min-height: 36px !important;
   margin: 0 !important;
-  padding: 0 !important;
-  border: 0 !important;
-  background: transparent !important;
-  opacity: 1 !important;
-  visibility: visible !important;
-  pointer-events: auto !important;
+}
+
+/* Google 首页的搜索表单被替换后仍与 Logo 水平居中，结果页不应用此布局。 */
+html[data-msp-native-search-active^="google."]
+  [data-msp-native-search-root="true"][data-msp-native-search-layout="google-home"] {
+  display: flex !important;
+  width: fit-content !important;
+  max-width: 100% !important;
+  margin: 0 auto !important;
+  align-self: center !important;
+}
+
+html[data-msp-native-search-active="xiaohongshu.com"]
+  [data-msp-native-search-layout="preserve"] {
+  --msp-search-width: 100%;
+  min-width: min(240px, calc(100vw - 32px)) !important;
+  max-width: calc(100vw - 32px) !important;
+}
+
+html[data-msp-native-search-active="xiaohongshu.com"]
+  [data-msp-native-search-layout="preserve"] > [data-msp-native-search-button="true"] {
+  max-width: 100% !important;
+  min-width: 0 !important;
 }
 
 [data-msp-native-search-button="true"] {
@@ -130,7 +175,7 @@ html[data-msp-native-search-active="xiaohongshu.com"]
     --msp-search-padding: 2px 26px 2px 2px;
     --msp-search-font-size: 12px;
   }
-  [data-msp-native-search-root="true"],
+  [data-msp-native-search-root="true"]:not([data-msp-native-search-layout="preserve"]),
   [data-msp-native-search-button="true"] {
     min-width: 88px !important;
     min-height: 30px !important;

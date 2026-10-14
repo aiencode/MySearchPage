@@ -36,7 +36,21 @@
   const SITE_CONFIGS = Object.freeze({
     'google.com': GOOGLE_SEARCH_CONFIG,
     'google.com.hk': GOOGLE_SEARCH_CONFIG,
+    'bing.com': Object.freeze({
+      redirectAlways: true,
+      requireVisibleInput: true,
+      inputSelectors: Object.freeze([
+        'input#sb_form_q', 'textarea#sb_form_q',
+        'input[name="q"]', 'textarea[name="q"]',
+      ]),
+      ownerSelectors: Object.freeze([
+        '.b_searchboxForm', '.b_searchbox', '#sb_form',
+        'form[action="/search"]', 'form[action*="/search?"]',
+      ]),
+      popupSelectors: Object.freeze(['#sw_as', '#sa_ul']),
+    }),
     'douyin.com': Object.freeze({
+      requireVisibleOwner: true,
       inputSelectors: Object.freeze([
         'input[data-e2e="searchbar-input"]',
         'input[data-e2e*="search"]',
@@ -116,6 +130,7 @@
       ]),
     }),
     'xiaohongshu.com': Object.freeze({
+      preserveOwnerLayout: true,
       inputSelectors: Object.freeze([
         'input[data-testid*="search"]',
         'input[placeholder*="搜索"]',
@@ -125,8 +140,16 @@
         '[data-testid="search-bar"]',
         '[data-testid="searchbox"]',
         '[role="search"]',
+        '.input-box',
+      ]),
+      residualSelectors: Object.freeze([
+        'header .input-button',
+        '.header-container .input-button',
+        'header .min-width-search-icon',
+        '.header-container .min-width-search-icon',
       ]),
       popupSelectors: Object.freeze([
+        '.sug-pad',
         '[class*="search-suggest"]',
         '[class*="search-history"]',
         '[class*="search-hot"]',
@@ -729,14 +752,14 @@
     return null;
   }
 
-  function isRenderedSearchControl(element, windowRef = global) {
+  function isRenderedSearchControl(element, windowRef = global, requireBox = true) {
     if (!element || String(element.getAttribute?.('type') || '').toLowerCase() === 'hidden') return false;
     for (let current = element; current; current = current.parentElement) {
       if (current.hasAttribute?.('hidden') || current.getAttribute?.('aria-hidden') === 'true') return false;
       const style = windowRef.getComputedStyle?.(current);
       if (style?.display === 'none' || style?.visibility === 'hidden' || style?.visibility === 'collapse') return false;
     }
-    if (typeof element.getBoundingClientRect === 'function') {
+    if (requireBox && typeof element.getBoundingClientRect === 'function') {
       const rect = element.getBoundingClientRect();
       return rect.width > 0 && rect.height > 0;
     }
@@ -868,6 +891,47 @@
     return '';
   }
 
+  function applySearchOwnerLayout(root, owner, targetSite, href = '') {
+    if (targetSite?.siteDomain?.startsWith('google.')) {
+      let home = false;
+      try {
+        const url = new URL(href);
+        home = ['/', '/webhp'].includes(url.pathname) && !url.searchParams.get('q');
+      } catch (error) {
+        // 地址未就绪时保留普通搜索入口布局。
+      }
+      if (home) root.setAttribute('data-msp-native-search-layout', 'google-home');
+      else if (root.getAttribute?.('data-msp-native-search-layout') === 'google-home') {
+        root.removeAttribute('data-msp-native-search-layout');
+        root.style?.removeProperty?.('align-self');
+        root.style?.removeProperty?.('max-width');
+      }
+      return;
+    }
+    if (!targetSite?.preserveOwnerLayout || root === owner || root.contains?.(owner)) return;
+    // 保留搜索定位及 Vue 样式作用域，不复制原生事件、其他 data-* 或弹层状态。
+    for (const name of ['class', 'id', 'style']) {
+      const value = owner.getAttribute?.(name);
+      if (value) root.setAttribute(name, value);
+      else root.removeAttribute?.(name);
+    }
+    root.className = `${root.getAttribute?.('class') || ''} msp-native-search-entry`.trim();
+    for (const attribute of Array.from(root.attributes || [])) {
+      if (attribute.name.startsWith('data-v-')) root.removeAttribute(attribute.name);
+    }
+    for (const attribute of Array.from(owner.attributes || [])) {
+      if (attribute.name.startsWith('data-v-')) root.setAttribute(attribute.name, attribute.value);
+    }
+    root.setAttribute('data-msp-native-search-layout', 'preserve');
+  }
+
+  function createReplacementRoot(documentRef, owner, targetSite, href = '') {
+    const root = documentRef.createElement('div');
+    root.className = 'msp-native-search-entry';
+    applySearchOwnerLayout(root, owner, targetSite, href);
+    return root;
+  }
+
   function setReplacementRootStyle(root) {
     const declarations = {
       'box-sizing': 'border-box',
@@ -889,7 +953,16 @@
       'pointer-events': 'auto',
     };
 
+    if (root.getAttribute?.('data-msp-native-search-layout') === 'google-home') {
+      Object.assign(declarations, {
+        display: 'flex', width: 'fit-content', margin: '0 auto',
+        'align-self': 'center', 'max-width': '100%',
+      });
+    }
+
     for (const [name, value] of Object.entries(declarations)) {
+      if (root.getAttribute?.('data-msp-native-search-layout') === 'preserve' &&
+          ['width', 'position', 'flex', 'margin', 'min-width', 'min-height'].includes(name)) continue;
       root.style?.setProperty?.(name, value, 'important');
     }
   }
@@ -940,6 +1013,7 @@
     const documentGuardEntries = [];
     const dynamicPopupCandidates = new Set();
     const searchShellStates = new Map();
+    const douyinSearchSlots = new Map();
     let searchShellStyle = null;
 
     function restoreSearchShell(shell, state) {
@@ -1019,6 +1093,26 @@
       ) || null;
     }
 
+    function purgeNativeSearchResidue(root) {
+      let removed = 0;
+      for (const selector of targetSite?.residualSelectors || []) {
+        const nodes = new Set(safeQueryAll(root, selector));
+        if (safeMatches(root, selector)) nodes.add(root);
+        for (const element of nodes) {
+          if (element.closest?.(`[${ROOT_ATTR}="true"]`) &&
+              !element.matches?.('.input-button, .min-width-search-icon')) continue;
+          removeElement(element);
+          removed += 1;
+        }
+      }
+      return removed;
+    }
+
+    function purgeXiaohongshuOnReturn() {
+      if (targetSite?.siteDomain !== 'xiaohongshu.com' || destroyed) return;
+      purgeAllPopups();
+    }
+
     function purgePopupSubtree(root) {
       if (!root || !targetSite) return 0;
 
@@ -1033,6 +1127,8 @@
       }
 
       for (const element of matches) {
+        const replacementRoot = currentReplacementRoot();
+        if (element === replacementRoot || element.contains?.(replacementRoot)) continue;
         removeElement(element);
       }
       return matches.size;
@@ -1102,7 +1198,7 @@
 
     function purgeAllPopups() {
       return purgePopupSubtree(documentRef) +
-        purgeTrackedDynamicPopups();
+        purgeTrackedDynamicPopups() + purgeNativeSearchResidue(documentRef);
     }
 
     function popupSweepTick() {
@@ -1180,7 +1276,7 @@
         'pointerenter',
         'pointermove',
         'focusin',
-      ]) {
+      ].concat(targetSite?.siteDomain === 'xiaohongshu.com' ? ['pointerdown', 'mousedown', 'focus'] : [])) {
         documentRef.addEventListener(
           eventType,
           stopOriginalHover,
@@ -1188,6 +1284,9 @@
         );
         documentGuardEntries.push(eventType);
       }
+      documentRef.addEventListener('visibilitychange', purgeXiaohongshuOnReturn, true);
+      windowRef.addEventListener?.('pageshow', purgeXiaohongshuOnReturn, true);
+      windowRef.addEventListener?.('focus', purgeXiaohongshuOnReturn, true);
     }
 
     function removeDocumentGuards() {
@@ -1199,6 +1298,9 @@
         );
       }
       documentGuardEntries.length = 0;
+      documentRef?.removeEventListener?.('visibilitychange', purgeXiaohongshuOnReturn, true);
+      windowRef.removeEventListener?.('pageshow', purgeXiaohongshuOnReturn, true);
+      windowRef.removeEventListener?.('focus', purgeXiaohongshuOnReturn, true);
       documentGuardsInstalled = false;
     }
 
@@ -1226,9 +1328,12 @@
     }
 
     function existingButton() {
-      return documentRef?.querySelector?.(
-        `[${BUTTON_ATTR}="true"]`
-      ) || null;
+      const connected = documentRef?.querySelector?.(`[${BUTTON_ATTR}="true"]`) || null;
+      if (connected || targetSite?.siteDomain !== 'douyin.com') return connected;
+      // 播放层或头部卸载后仍复用同一入口，保留关键词、选区和监听器。
+      return Array.from(replacementStates).reverse()
+        .map(state => safeQuery(state.replacementRoot, `[${BUTTON_ATTR}="true"]`))
+        .find(Boolean) || null;
     }
 
     function forgetReplacementRoot(replacementRoot) {
@@ -1269,6 +1374,48 @@
       }
     }
 
+    function rememberDouyinSearchSlot(owner, replacementRoot) {
+      if (targetSite?.siteDomain !== 'douyin.com' || !documentRef.createComment ||
+          !owner?.parentNode || owner === replacementRoot || replacementRoot.contains?.(owner)) return;
+      const parent = owner.parentNode;
+      const previous = douyinSearchSlots.get(parent);
+      if (previous?.owner === owner && previous.anchor.parentNode === parent) {
+        previous.replacementRoot = replacementRoot;
+        return;
+      }
+      if (previous) removeElement(previous.anchor);
+      const anchor = documentRef.createComment('msp-douyin-search-slot');
+      const nextSibling = owner.nextSibling;
+      parent.insertBefore(anchor, owner);
+      douyinSearchSlots.set(parent, { owner, anchor, nextSibling, replacementRoot });
+    }
+
+    function reconcileDouyinSearchEntry() {
+      if (targetSite?.siteDomain !== 'douyin.com' || destroyed) return false;
+      const entry = currentReplacementRoot() || Array.from(douyinSearchSlots.values())
+        .map(slot => slot.replacementRoot).find(root => safeQuery(root, `[${BUTTON_ATTR}="true"]`));
+      for (const [parent, slot] of douyinSearchSlots) {
+        if (!documentRef.documentElement?.contains?.(parent)) {
+          removeElement(slot.anchor);
+          douyinSearchSlots.delete(parent);
+        }
+      }
+      if (!entry || (entry.isConnected !== false &&
+          isRenderedSearchControl(safeQuery(entry, `[${BUTTON_ATTR}="true"]`), windowRef))) return false;
+      for (const [parent, slot] of douyinSearchSlots) {
+        // display:contents 外壳没有矩形；这里只检查挂载点祖先的隐藏状态。
+        if (!isRenderedSearchControl(parent, windowRef, false)) continue;
+        if (slot.anchor.parentNode !== parent) {
+          parent.insertBefore(slot.anchor, slot.nextSibling?.parentNode === parent ? slot.nextSibling : null);
+        }
+        if (slot.anchor.nextSibling === entry) return false;
+        parent.insertBefore(entry, slot.anchor.nextSibling);
+        rememberReplacement(slot.owner, entry);
+        return true;
+      }
+      return false;
+    }
+
     function replaceOwner(owner, sourceInput) {
       if (
         !owner ||
@@ -1288,6 +1435,7 @@
           removeElement(currentButton);
           currentButton = null;
         } else {
+          applySearchOwnerLayout(currentRoot, owner, targetSite, windowRef.location?.href);
           setReplacementRootStyle(currentRoot);
           setButtonStyle(currentButton);
           currentButton.value = searchKeywordForInput(sourceInput, windowRef.location?.href, targetSite.siteDomain);
@@ -1305,6 +1453,7 @@
             return currentButton;
           }
 
+          rememberDouyinSearchSlot(owner, currentRoot);
           const placed = owner.contains?.(currentRoot)
             ? hoistReplacementOutOfOwner(
               owner,
@@ -1327,9 +1476,7 @@
       }
 
       const parent = owner.parentNode;
-      const replacementRoot = documentRef.createElement('div');
-      replacementRoot.className =
-        'msp-native-search-entry';
+      const replacementRoot = createReplacementRoot(documentRef, owner, targetSite, windowRef.location?.href);
       replacementRoot.setAttribute(ROOT_ATTR, 'true');
       replacementRoot.setAttribute(
         SOURCE_ATTR,
@@ -1363,6 +1510,7 @@
       }, true);
 
       replacementRoot.appendChild(button);
+      rememberDouyinSearchSlot(owner, replacementRoot);
       parent.replaceChild(replacementRoot, owner);
       rememberReplacement(owner, replacementRoot);
 
@@ -1407,9 +1555,12 @@
         if (targetSite.requireVisibleInput && !isRenderedSearchControl(input, windowRef)) continue;
         const owner = findSearchOwner(input, targetSite);
         if (!owner?.parentNode) continue;
+        if (targetSite.requireVisibleOwner &&
+            !isRenderedSearchControl(owner === input ? owner.parentElement : owner, windowRef, false)) continue;
         if (replaceOwner(owner, input)) replacements += 1;
       }
 
+      reconcileDouyinSearchEntry();
       reconcileSearchShells();
       if (options.skipFinalFullPurge !== true) {
         purgeAllPopups();
@@ -1435,6 +1586,8 @@
             });
           }
         } finally {
+          reconcileDouyinSearchEntry();
+          reconcileSearchShells();
           purgeAllPopups();
         }
       });
@@ -1468,6 +1621,23 @@
     }
 
     function restoreReplacements() {
+      if (douyinSearchSlots.size) {
+        const roots = new Set(Array.from(replacementStates, state => state.replacementRoot));
+        for (const [parent, slot] of douyinSearchSlots) {
+          roots.add(slot.replacementRoot);
+          if (documentRef.documentElement?.contains?.(parent) &&
+              !documentRef.documentElement.contains(slot.owner)) {
+            const next = slot.anchor.parentNode === parent ? slot.anchor.nextSibling :
+              (slot.nextSibling?.parentNode === parent ? slot.nextSibling : null);
+            parent.insertBefore(slot.owner, next);
+          }
+          removeElement(slot.anchor);
+        }
+        for (const root of roots) removeElement(root);
+        douyinSearchSlots.clear();
+        replacementStates.clear();
+        return;
+      }
       for (const state of replacementStates) {
         if (state.replacementRoot?.parentNode) {
           state.replacementRoot.parentNode.replaceChild(
@@ -1579,6 +1749,9 @@
   const api = Object.freeze({
     BUTTON_ATTR,
     ROOT_ATTR,
+    applySearchOwnerLayout,
+    createReplacementRoot,
+    setReplacementRootStyle,
     SOURCE_ATTR,
     ACTIVE_ATTR,
     SHELL_ATTR,

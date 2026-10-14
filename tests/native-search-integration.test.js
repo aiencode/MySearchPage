@@ -30,6 +30,7 @@ test('替换脚本复用现有全站内容脚本和高风险域名策略', () =>
     '*://*.xiaohongshu.com/*',
     '*://*.google.com/*',
     '*://*.google.com.hk/*',
+    '*://*.bing.com/*',
   ]);
   assert.match(read('extension/shared/mysearch-navigation.js'), /navigation\/navigation\.html/);
   assert.match(read('extension/background/ua-controller.js'), /OPEN_MYSEARCH_PAGE/);

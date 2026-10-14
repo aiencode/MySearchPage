@@ -2,7 +2,7 @@
 
 ## 范围与执行方式
 
-本组保护本对话的修复：搜索入口被“已屏蔽”盖住、共享容器误遮挡头像/历史/收藏、占位继承旧尺寸、Google入口缺失、抖音悬停残留、跳转关键词丢失与光标错位。Git认证/推送不属于产品测试范围。
+本组保护本对话的修复：搜索入口被“已屏蔽”盖住、共享容器误遮挡头像/历史/收藏、占位继承旧尺寸、Google/必应入口缺失、抖音悬停残留与播放返回入口丢失、跳转关键词丢失与光标错位，以及小红书替换框被侧栏遮挡、原生搜索控件/建议层残留。Git认证/推送不属于产品测试范围。
 
 自动化采用Node内置测试与生产函数、最小DOM/API替身：单进程、64 MB JavaScript堆上限，不安装依赖，不启动浏览器、完整页面、外部进程或网络请求。命令：
 
@@ -15,11 +15,11 @@ node --max-old-space-size=64 tests/native-search-regression.run.cjs
 ### 公共前置条件（现场验收）
 
 1. 使用专用测试规则；不要覆盖真实规则/历史。局部屏蔽词设为`搜索`、`BLOCKME`，局部URL词设为`/forbidden`。页面标题与当前URL不命中整页规则。
-2. 确认扩展实际加载路径、运行版本和后台Service Worker已更新（当前基线1.0.2或后继版本）。重新加载扩展后，刷新相关源页面；仅刷新网页不证明后台已更新。
-3. Google覆盖`google.com`、`google.com.hk`，输入形态覆盖`input[name=q]`和`textarea[name=q]`；抖音覆盖普通及`/jingxuan/search/`路径。
+2. 确认扩展实际加载路径、运行版本和后台Service Worker已更新（小红书修复基线1.0.3；抖音播放返回修复1.0.4；必应替换1.0.5；Google首页居中1.0.6或后继版本）。重新加载扩展后，刷新相关源页面；仅刷新网页不证明后台已更新。
+3. Google覆盖`google.com`、`google.com.hk`；必应覆盖`www.bing.com`、`cn.bing.com`，输入形态覆盖`input/textarea#sb_form_q`及`[name=q]`；抖音覆盖普通及`/jingxuan/search/`路径。
 4. 布局分别在1200px、768px、480px、390px检查。保留头像、历史、收藏和关闭/返回按钮。
 5. 自动化默认后台操作，禁止置顶窗口、全局键盘、模拟登录、绕过验证码。真实鼠标定位是人工发布验收；窗口自然获得焦点即可，验证工具不可强制聚焦窗口。
-6. 各用例独立恢复测试状态；不保存测试关键词到历史，不提交搜索，不播放媒体。临时探针使用完必须卸载，不把诊断面板/脚本打包发布。
+6. 各用例独立恢复测试状态；不保存测试关键词到历史，不提交搜索。默认不播放媒体；TC-NS-19等明确授权的播放返回用例仅打开与关闭必要视频，不做点赞、收藏或发送。临时探针使用完必须卸载，不把诊断面板/脚本打包发布。
 
 ## 用例
 
@@ -117,6 +117,38 @@ node --max-old-space-size=64 tests/native-search-regression.run.cjs
 - 预期：共享导航解析器在navigation.js之前加载；所有manifest脚本存在；未保留临时native-search-caret诊断页/脚本、重型浏览器交接测试或预览壳；无本功能主动置顶/原站全局键盘逻辑。
 - 自动化：TC-NS-16契约检查。旧ZIP不能算本次交付，打包后仍须检查包内版本与文件。
 
+### TC-NS-17（P0）小红书替换框不落入左侧栏遮挡区
+- 前置：顶部原生搜索区使用`.input-box`或稳定搜索owner；线上CSS通过`.input-box[data-v-*]`决定fixed定位、居中transform及响应式宽度，Vue作用域属性的值可为空。左侧栏的图层高于普通内容。
+- 操作：记录原搜索区矩形，在1200/768/480/390px宽度下替换；检查搜索框中心及左侧文字位置的命中元素；二次搜索重建owner后再检查。
+- 预期：替换根保留搜索owner的class/id/style及全部`data-v-*`样式作用域（包括空值），不复制onclick、其他data属性或弹层状态；复用时删除旧作用域并同步新owner。通用根样式不改成relative或重置宽度、margin、flex。调整对象是`data-msp-native-search-root`及其中的新只读输入，不是原生放大镜/X；侧栏保留，关键词与光标消息不变，其他站点沿用原通用定位。
+- 自动化：`native-search-surface-regression.test.js`中TC-NS-17的4项代码回归。先前四档离线样例未包含Vue作用域，因此不能证明线上修复；真实页背景DOM/API记录另列于执行记录，不能替代四档现场与硬件鼠标验收。
+
+### TC-NS-18（P0）小红书原生控件及返回旧页的建议层清除
+- 前置：插件替换框已挂载；头部原生`.input-button`（放大镜/清空控件）、`.min-width-search-icon`及原生建议层`.sug-pad`可能在首次扫描或延迟更新时出现。
+- 操作：点击新框任意光标位置并跳转导航页；主动返回来源页；分别检查visibilitychange、pageshow、窗口自然focus后的迟到建议层。停用运行时后检查监听器移除。
+- 预期：CSS先防闪现，DOM清理移除原生控件与`.sug-pad`；返回事件再次清理，MutationObserver处理迟到挂载。不得删除新框、其祖先或侧栏；pointerdown/mousedown/focus守卫阻止原生传播但不preventDefault，保留浏览器光标定位和既有关键词/选区交接。停用后解除新增监听器。
+- 自动化：TC-NS-18的2项生产运行时回归，覆盖清理对象、返回事件、默认光标动作和监听器注销。真实页DOMclick是合成点击；派发事件与浏览器实际标签返回的证据必须分开记录。已验证真实visibilitychange返回；硬件鼠标定位和人工窗口聚焦仍不由后台探针代替。
+
+### TC-NS-19（P0）抖音关闭站内视频播放界面后搜索框恢复
+- 前置：在抖音关键词搜索结果列表中已有插件只读新框；点视频进入同一页面的播放层。搜索结果列表与播放层各自可能保留/重建搜索区，关闭不一定重新生成原生input。
+- 操作：播放层关闭分别覆盖卸载DOM、仅hidden/displaynone；返回时原列表头部不重建input、清空子节点或整个头部重建。加入隐藏的原生搜索副本，连续开关3轮，再停用运行时。
+- 预期：隐藏搜索区域不能抢走可见入口；播放层卸载或隐藏后，即使没有新原生input，也把同一个新框恢复到此前记录的可见搜索挂载点，保留关键词、选区及跳转监听器。只隐藏列表时不强行展示；原区域整体卸载后不凭空挂到body。新owner出现时复用脱离DOM的原框，不重复入口，不覆盖关闭/返回、结果列表或媒体节点。
+- 边界：扩展CSS会预先隐藏原生input，故检测owner/父区域的可见祖先，不能凭原生input零尺寸跳过初次替换；display:contents区域可以作为恢复挂载点。恢复后的重复观察回调不反复搬动/写样式；停用时恢复各仍连接搜索owner并清除注释锚点。
+- 自动化：`native-search-surface-regression.test.js`中TC-NS-19的9项定向回归，调用生产createController和观察器回调，仍属小DOM替身，不等同于线上React播放流程验收。真实现场需已授权现有浏览器后台打开视频再关闭核对，禁止独立测试浏览器或前台聚焦兜底。
+
+### TC-NS-20（P0）必应搜索框替换及关键词交接
+- 前置：扩展1.0.5或后继版本，必应不需加入高风险域名名单；页面未被整页屏蔽。覆盖国际版、国内版及首页/结果页的input、textarea形态。
+- 操作：加载含`#sb_form_q`或`[name=q]`的搜索外壳，加入隐藏搜索副本及无关输入；核对搜索框替换后点击交接，再停用运行时。
+- 预期：仅可见搜索输入被替换，优先选`.b_searchboxForm`/`.b_searchbox`，缺失时才回退到`#sb_form`；新框唯一、只读并保留原关键词。移除原生按钮和`#sw_as`/`#sa_ul`建议层，不删除结果、账户或侧栏；停用恢复原搜索外壳。不匹配`notbing.com`，不改变高风险域名策略。
+- 自动化：TC-NS-20的4项轻量回归，覆盖域名、input/textarea、隐藏副本、生产控制器外壳替换/恢复、样式注入与建议层作用域。关键词/光标交接复用既有共享测试。新增CSS仅为激活态建议层隐藏；搜索框尺寸与移动断点复用现行通用样式，不新增独立布局。
+- 现场边界：后台合成点击后必须读取导航关键词和真实页面DOM；整页被屏蔽则记录该项受阻，不为测试修改屏蔽规则。
+
+### TC-NS-21（P0）Google首页替换框保持居中，不改变结果页定位
+- 前置：Google两个受支持域名，扩展1.0.6或后继版本。首页路径`/`、`/webhp`且无非空q；`/search`、非空q和`/imghp`不启用首页布局。
+- 操作：创建替换框，检查首页标记及`flex/fit-content/0 auto`；在生产控制器内将同一入口复用到结果页新owner，核对标记及专用样式清除。检查1200、768、480、390px的浏览器内小布局。
+- 预期：首页新框与页面/Logo水平中心一致，保留垂直位置和原字号/尺寸断点；结果页保持普通位置，不强制居中。复用时移除首页专用align-self/max-width，关键词和唯一入口保留；其他站点布局不变。
+- 自动化：TC-NS-21的4项轻量回归，覆盖两域名页面分类、生产控制器初建/复用、CSS作用域及移动断点。四档iframe为小布局渲染样例，不能冒充真实移动版Google页面；真实桌面首页另读DOM并截图。
+
 ## 记录与判定
 
 每次执行记录：Test Case ID、代码提交号、运行扩展版本/路径、浏览器与视口、规则配置（不含密钥/令牌）、输入词、源选区、创建时URL、目标值/选区、验证方式、通过/失败/阻塞及证据位置。
@@ -128,14 +160,14 @@ node --max-old-space-size=64 tests/native-search-regression.run.cjs
 | 文件 | 主要覆盖 |
 |---|---|
 | `native-search-blocking-regression.test.js` | 01–04 |
-| `native-search-surface-regression.test.js` | 05–09、16 |
+| `native-search-surface-regression.test.js` | 05–09、16–21 |
 | `native-search-caret-handoff.test.js` | 10–14（含生产后台分支） |
 | `mysearch-navigation.test.js` | 11、14 |
 | `native-search-integration.test.js` | 11、16 |
 | `native-search-redirect.test.js` | 05–10的既有配置/owner/扫描契约 |
 | `native-search-regression.run.cjs` | 单进程运行上述定向测试，不包含浏览器或全量套件 |
 
-## 本次执行记录
+## 原测试补齐执行记录
 
 - 生产代码基线：`2fcc034`（已推送的搜索入口与光标交接修复）。
 - 当前工作区：63 项通过、0 失败、0 跳过，约0.14秒。
@@ -143,3 +175,50 @@ node --max-old-space-size=64 tests/native-search-regression.run.cjs
 - 新增/修改的5个JavaScript测试与支撑文件均通过`node --check`。
 - 本轮未运行浏览器、未连接用户账号、未置顶窗口、未执行手工发布验收。TC-NS-10真实鼠标定位、TC-NS-04像素占位、TC-NS-07伪元素实绘和TC-NS-15已安装后台版本检查不能据此改记为现场通过。
 - 仅添加/增强测试和测试说明，未改生产功能；没有在本轮自动提交或推送测试。
+
+## 小红书搜索位置与建议层补修执行记录
+
+- 首次仅保留class/id/style的修复：66项代码回归及四档离线CSS样例通过，但用户反馈线上仍被遮挡，因此不认定问题已解决。
+- 真实页定位根因：新框缺失`data-v-4439d232`，站点`.input-box[data-v-4439d232]`规则不匹配；修复前position为static，x=96、width=279，视口宽1920。修复对象是插件替换根，而非原生输入/图标。
+- 已补保留Vue作用域，加入`.sug-pad`与头部原生控件的CSS/DOM清理及返回事件守卫；manifest版本1.0.3。相关修复尚未提交/推送。
+- 已有授权Chrome后台探针记录：重新加载扩展并刷新相关源页后，新框position=fixed、x=693.3359375、y=16、width=533.328125，中心命中新框；关键词`claudecode router`保留，原生残留数量0、`.sug-pad`数量0。没有激活窗口或启动独立浏览器。
+- 同一次真实页DOMclick及手动派发visibilitychange/pageshow的探针中，迟到`.sug-pad`被删除、新框仍连接且关键词保留。该方法不等同于硬件鼠标与人工自然切回旧页验收。
+- 早期后台核对曾报`authorization_host_failed` / `the browser operation requires an explicit session`；查阅驱动`describe get_browser_state`后确认正确参数为`session`而非`session_id`。使用`session=xhs-live-check-v3`重新prepare/bind后已恢复，阻塞解除。
+- 本轮单进程64 MB轻量回归69项通过、0失败、0跳过，约0.14秒；生产运行时及2个相关测试/支撑脚本语法通过，相关diff无空白错误，manifest核对为1.0.3。临时`xhs-entry-check.js`、离线小红书预览及导航页加载钩子已确认回收；保留测试和证据日志。
+- 后续现场复验：现有Chrome、1920×859视口、扩展1.0.3；点击前后截图均显示新框居中、左侧栏保留、无原生放大镜/X和建议浮层。新框唯一，矩形x=693.3359375、y=15.40625、width=533.328125、height=41.1875；左端与中心elementFromPoint都命中新输入框。
+- 在真实源页执行一次后台DOMclick，导航标签数量从4增至5；来源页变hidden，新框关键词`claudecode router`与源选区3–3保留，原生输入/控件残留/`.sug-pad`均为0。合成点击不证明硬件鼠标光标定位。
+- 通过扩展`chrome.tabs.update(sourceId,{active:true})`切回来源标签，未调用windows.update或前台输入。捕获浏览器真实`visibilitychange`（isTrusted=true、visible），非手动dispatchEvent；返回后布局、关键词和选区不变，三类原生残留仍为0。返回后的再次截图亦无建议层。
+- 本轮真实返回证据：会话scratch的`xhs-real-return-live.json`。临时`xhs-return-check.js`及导航加载钩子已删除；测试新建的导航页在面板清理未成功后已导航到about:blank卸载探针，未关闭或改写原有用户标签。没有独立测试浏览器或重型浏览器套件。
+
+## 抖音播放返回入口补修执行记录
+
+- 已复现生产控制器缺口：播放层生成搜索区时唯一入口被搬走；关闭后若列表不重建原生input，扫描没有恢复依据；隐藏原生副本也能抢走入口。补修前TC-NS-19最初5项中4项失败（隐藏副本、卸载返回、隐藏返回、多轮返回），反例“不可见/已卸载区域不造全局框”通过。
+- 修复限抖音：记录原搜索区域注释锚点、观察器末尾协调入口位置；只回到已确认且仍连接/可见的搜索挂载点；复用已脱离DOM的新框。可见性检查owner/父区域以兼容扩展先隐藏原生input；停用时恢复owner并清除锚点。版本1.0.4，未提交/推送。
+- TC-NS-19共9项轻量回归；回收探针后的单进程64 MB定向回归共78项通过、0失败、0跳过，约0.17秒；生产运行时、定向测试和DOM支撑脚本语法检查通过，任务范围CRLF-aware差异检查通过，manifest核对为1.0.4。未安装依赖、未启动独立浏览器、未运行旧重型browser.cjs。
+- 早期连接因Chrome更换进程和同意超时受阻；用户确认已点击允许后，使用`session=douyin-detail-return-v4`绑定窗口102760470/PID262440，阻塞解除。现场旧运行版本1.0.3在“六点半”搜索页无替换根、无原生input、无锚点；经临时扩展页重载MySearchPage并刷新这一源标签后，直接读取运行manifest确认1.0.4，新框出现。
+- 实际线上验证：现有Chrome后台合成DOM点击视频封面，进入正式同页播放界面（URL仅增加`modal_id`，未新开视频页面），点击截图确认的左上角关闭控件后，URL去掉`modal_id`并恢复结果列表。两个实际播放视频ID为`7695464132987964681`和`7654165094380686626`；播放画面与返回画面均已截图核对。第一轮播放中为3个video节点、2个搜索锚点，新框位于播放外壳屏外；关闭后恢复原列表头部。第二轮未在播放中打开导航页，也成功恢复。
+- 两轮返回后的DOM读数一致：替换根1个、搜索锚点1个、原生搜索input 0个；新框rect为`[671.09375,7.40625,420,41.1875]`（结果页视口1910×859），中心命中input，关键词“六点半”、选区`[3,3]`均保留。第二轮最终video节点为0。此为真实站点DOM/截图和播放流程证据，但点击属于不可信合成事件，不冒称硬件鼠标验收，也不把仅派发点击当作通过。
+- 临时`douyin-return-check.js`和navigation加载钩子已回收；浏览器重新绑定确认只剩原来的5个标签，测试创建的2个空白标签和1个诊断导航标签均已关闭。TC-NS-16补充了抖音探针不得残留的契约。
+- 证据位于会话scratch：`douyin-real-playback-return-live.json`、`douyin-return-before.log`、`douyin-return-final.log`；相关源码diff为`douyin-return-runtime.diff`。最终轻量回归和语法/差异检查结果见`douyin-return-clean-final.log`。
+
+## 必应替换执行记录
+
+- 原缺口：manifest已有必应站点权限，但SITE_CONFIGS和替换CSS注入名单缺少必应。新增TC-NS-20最初确认域名识别/样式契约失败，修复后支持必应及其子域，不加入高风险名单。版本1.0.5，未提交/推送。
+- 现有Chrome后台验证：最初运行manifest为1.0.4，实际必应仍为`input#sb_form_q`与原生按钮；经任务专用导航探针重载MySearchPage并重新加载测试结果页后，直接读取运行manifest为1.0.5。使用导航页已有词`picot github`打开必应，未改输入词；这一正常搜索流程会按产品规则处理原有历史，未添加新的测试关键词或清空历史。
+- 国际版`https://www.bing.com/search?q=picot%20github`：替换根1、原生input 0、建议层0，结果/账户区域均存在；新框rect`[58,22,420,36]`、只读、中心命中，词`picot github`，选区`[12,12]`。后台合成点击新框后打开MySearchPage，导航输入保持同一词。
+- 国内版`https://cn.bing.com/search?q=picot%20github`：同样替换根1、原生input/建议层0、结果/账户保留；rect`[160,50,420,36]`、只读、中心命中、选区`[12,12]`。两页视口均为1905×859并有实际截图证据；未执行硬件鼠标或真实移动端验收。
+- 必应首页导航返回`net::ERR_BLOCKED_BY_CLIENT`，未修改现有屏蔽规则，故首页现场验收未计通过；首页input/textarea形态由轻量控制器用例覆盖。搜索结果页验收已通过。
+- 临时`bing-entry-check.js`和navigation挂载钩子已删除；浏览器重绑确认本次测试结果/诊断标签均关闭，原有5个标签保留（包括用户在测试期间自行打开的标签）。TC-NS-16补充探针不得发布的契约。
+- 证据及日志位于会话scratch：`bing-replacement-live.json`、`bing-replacement-before.log`、`bing-replacement-final.log`。
+- 最终检查：单进程64 MB定向回归82项通过、0失败、0跳过，约0.18秒；3份相关JavaScript语法检查、manifest版本/临时探针缺失检查及任务范围CRLF-aware差异检查均通过。
+
+## Google首页居中执行记录
+
+- 原因：整体替换原搜索form后未保留其居中规则；通用根为inline-flex、margin:0，在Google首页块级父容器里靠左。旧版本1.0.5现场rect`[96,370,420,41.1875]`、父区域`[0,350,1920,81.1875]`、中心偏差-654px。新增TC-NS-21修复前4项均失败。
+- 修复：首页专用`google-home`布局标记与auto左右margin，JS内联和CSS保持一致；路径和非空q决定是否首页。初建与复用均传递实际href，结果页复用时解除首页专用样式。版本1.0.6，未提交/推送。
+- 现有Chrome后台重载后直接读运行manifest为1.0.6；真实Google首页viewport1920×859，rect`[750,370,420,41.1875]`、唯一入口、中心偏差0px、中心命中input、空关键词及选区[0,0]保留，垂直位置不变。修复前后截图分别为p70/p74，精确读数p73/p79。
+- 结果页对照使用任务新建后台标签，词`picot github`，rect`[280,31.40625,420,41.1875]`、layout标记为空、唯一且中心可命中、选区[12,12]；保持头部左侧定位，不套用首页居中。
+- 同一Chrome内使用生产createReplacementRoot/setReplacementRootStyle和生产CSS渲染4个离屏小iframe，宽度1200/768/480/390px，首页中心偏差均为0；输入宽度336/280/216/175.5px，字号16/12/12/12px。切换到结果页后左侧位置均为8px；最终残留iframe为0。这是浏览器布局样例，不是硬件鼠标或真实手机Google全页验收。
+- 临时google-home-check.js与导航挂载已回收，任务结果页和诊断标签已关闭，原Google首页保留；扩展重载使旧扩展诊断/设置页结束。未强制前台、未使用全局键盘或独立测试浏览器。
+- 证据与轻量回归日志位于会话scratch：`google-home-center-live.json`、`google-home-center-before.log`、`google-home-center-final.log`。
+- 回收诊断后的最终检查：单进程64 MB轻量回归86项通过、0失败、0跳过，约0.16秒；运行时/测试语法、manifest 1.0.6、探针缺失及任务范围CRLF-aware差异检查均通过。

@@ -34,6 +34,7 @@ class Element {
     this.textContent = ''; this.exactMatches = new Set(); this.attributeWrites = 0;
     this.rect = { width: 200, height: 30 }; this.computed = { display: 'block', visibility: 'visible' };
   }
+  get attributes() { return Array.from(this.attrs, ([name, value]) => ({ name, value })); }
   getAttribute(name) { return this.attrs.get(name) ?? null; }
   hasAttribute(name) { return this.attrs.has(name); }
   setAttribute(name, value) { this.attributeWrites++; this.attrs.set(name, value); }
