@@ -2,7 +2,8 @@
  * 将高风险站点的原生搜索组件整体替换为 MySearchPage 自绘入口。
  *
  * 抖音不依赖动态 class：以 searchbar-input 和 searchbar-button
- * 同属的最窄祖先作为原生搜索 owner，整体移除。
+ * 同属的最窄搜索专属祖先作为 owner；共同祖先还承载关闭、返回等
+ * 原生控件时，只替换 input 所在分支，不移除共享外壳。
  */
 (function installNativeSearchRedirect(global) {
   'use strict';
@@ -11,6 +12,7 @@
   const ROOT_ATTR = 'data-msp-native-search-root';
   const SOURCE_ATTR = 'data-msp-native-search-source-root';
   const ACTIVE_ATTR = 'data-msp-native-search-active';
+  const SHELL_ATTR = 'data-msp-native-search-shell';
   const BUTTON_TEXT = '搜索资料';
   const HIGH_RISK_KEY = 'highRiskDomains';
   const POPUP_SWEEP_INTERVAL_MS = 100;
@@ -23,7 +25,17 @@
     'youtube.com',
   ]);
 
+  const GOOGLE_SEARCH_CONFIG = Object.freeze({
+    redirectAlways: true,
+    requireVisibleInput: true,
+    inputSelectors: Object.freeze(['input[name="q"]', 'textarea[name="q"]']),
+    ownerSelectors: Object.freeze(['[role="search"]', 'form[action="/search"]', 'form[action*="/search?"]']),
+    popupSelectors: Object.freeze([]),
+  });
+
   const SITE_CONFIGS = Object.freeze({
+    'google.com': GOOGLE_SEARCH_CONFIG,
+    'google.com.hk': GOOGLE_SEARCH_CONFIG,
     'douyin.com': Object.freeze({
       inputSelectors: Object.freeze([
         'input[data-e2e="searchbar-input"]',
@@ -144,6 +156,16 @@
     '[role="button"]',
     'img',
     'video',
+    'svg',
+    '[onclick]',
+    '[data-e2e*="close" i]',
+    '[data-e2e*="back" i]',
+    '[aria-label*="关闭"]',
+    '[aria-label*="返回"]',
+    '[aria-label*="close" i]',
+    '[aria-label*="back" i]',
+    '[title*="关闭"]',
+    '[title*="返回"]',
   ].join(',');
 
   const DOUYIN_OWNER_STOP_TAGS = new Set([
@@ -189,9 +211,8 @@
 
     if (
       !configuredDomain ||
-      !allowedDomains.some(domain =>
-        hostMatchesDomain(hostname, domain)
-      )
+      (!SITE_CONFIGS[configuredDomain].redirectAlways &&
+        !allowedDomains.some(domain => hostMatchesDomain(hostname, domain)))
     ) {
       return null;
     }
@@ -360,6 +381,32 @@
     return true;
   }
 
+  function relocateReplacementToOwner(
+    owner,
+    replacementRoot
+  ) {
+    if (
+      !owner ||
+      !replacementRoot ||
+      owner === replacementRoot ||
+      !owner.parentNode ||
+      owner.contains?.(replacementRoot) ||
+      replacementRoot.contains?.(owner)
+    ) {
+      return false;
+    }
+
+    try {
+      owner.parentNode.replaceChild(
+        replacementRoot,
+        owner
+      );
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
   function matchesAnySelector(element, selectors) {
     return Array.from(selectors || []).some(selector =>
       safeMatches(element, selector)
@@ -373,12 +420,115 @@
     );
   }
 
+  function douyinControlMetadata(element) {
+    return [
+      element?.getAttribute?.('data-e2e') || '',
+      element?.getAttribute?.('aria-label') || '',
+      element?.getAttribute?.('title') || '',
+      element?.getAttribute?.('placeholder') || '',
+      typeof element?.className === 'string'
+        ? element.className
+        : element?.getAttribute?.('class') || '',
+      String(element?.textContent || '').slice(0, 120),
+    ].join(' ');
+  }
+
+  function isDouyinCloseControl(element) {
+    return /close|back|关闭|返回|退出/i.test(
+      douyinControlMetadata(element)
+    );
+  }
+
+  function directChildWithin(ancestor, element) {
+    if (!ancestor || !element) return null;
+    if (ancestor === element) return element;
+
+    let current = element;
+    for (
+      let depth = 0;
+      current && depth < 16;
+      depth += 1
+    ) {
+      const parent =
+        current.parentElement ||
+        current.parentNode ||
+        null;
+      if (parent === ancestor) return current;
+      current = parent;
+    }
+
+    return null;
+  }
+
+  function douyinOwnerHasUnrelatedControls(
+    owner,
+    input,
+    submit,
+    targetSite
+  ) {
+    if (!owner) return false;
+
+    return safeQueryAll(
+      owner,
+      DOUYIN_OWNER_GUARD_SELECTOR
+    ).some(element => {
+      if (element === input || element === submit) {
+        return false;
+      }
+      if (
+        input?.contains?.(element) ||
+        submit?.contains?.(element)
+      ) {
+        return false;
+      }
+      return !isDouyinSearchRelatedControl(
+        element,
+        null,
+        targetSite
+      );
+    });
+  }
+
+  function narrowDouyinSearchOwner(
+    owner,
+    input,
+    submit,
+    targetSite
+  ) {
+    let candidate = owner;
+
+    for (
+      let depth = 0;
+      candidate && depth < 16;
+      depth += 1
+    ) {
+      if (!douyinOwnerHasUnrelatedControls(
+        candidate,
+        input,
+        submit,
+        targetSite
+      )) {
+        return candidate;
+      }
+
+      const next = directChildWithin(
+        candidate,
+        input
+      );
+      if (!next || next === candidate) return input;
+      candidate = next;
+    }
+
+    return input;
+  }
+
   function isDouyinSearchRelatedControl(
     element,
     currentOwner,
     targetSite
   ) {
     if (!element) return true;
+    if (isDouyinCloseControl(element)) return false;
     if (currentOwner?.contains?.(element)) return true;
 
     if (
@@ -397,17 +547,9 @@
       return true;
     }
 
-    const metadata = [
-      element.getAttribute?.('data-e2e') || '',
-      element.getAttribute?.('aria-label') || '',
-      element.getAttribute?.('placeholder') || '',
-      typeof element.className === 'string'
-        ? element.className
-        : element.getAttribute?.('class') || '',
-      String(element.textContent || '').slice(0, 120),
-    ].join(' ');
-
-    return /search|搜索/i.test(metadata);
+    return /search|搜索/i.test(
+      douyinControlMetadata(element)
+    );
   }
 
   function canExpandDouyinSearchOwner(
@@ -483,14 +625,20 @@
     }
 
     let owner = null;
+    let submit = null;
     let current =
       input.parentElement ||
       input.parentNode ||
       null;
 
     for (let depth = 0; current && depth < 12; depth += 1) {
-      if (safeQuery(current, targetSite.submitSelector)) {
+      const candidateSubmit = safeQuery(
+        current,
+        targetSite.submitSelector
+      );
+      if (candidateSubmit) {
         owner = current;
+        submit = candidateSubmit;
         break;
       }
       current =
@@ -499,7 +647,15 @@
         null;
     }
 
-    if (!owner) return null;
+    if (!owner || !submit) return null;
+
+    const safeOwner = narrowDouyinSearchOwner(
+      owner,
+      input,
+      submit,
+      targetSite
+    );
+    if (safeOwner !== owner) return safeOwner;
 
     /*
      * 稳定站点 selector 命中更外层搜索 owner 时优先使用。
@@ -508,15 +664,25 @@
     for (const selector of targetSite.ownerSelectors || []) {
       try {
         const configuredOwner = input.closest?.(selector);
-        if (
-          configuredOwner &&
-          configuredOwner.contains?.(owner) &&
-          safeQuery(
+        const configuredSubmit = configuredOwner
+          ? safeQuery(
             configuredOwner,
             targetSite.submitSelector
           )
+          : null;
+        if (
+          configuredOwner &&
+          configuredOwner.contains?.(owner) &&
+          configuredSubmit &&
+          !douyinOwnerHasUnrelatedControls(
+            configuredOwner,
+            input,
+            configuredSubmit,
+            targetSite
+          )
         ) {
           owner = configuredOwner;
+          submit = configuredSubmit;
           break;
         }
       } catch (error) {
@@ -525,8 +691,9 @@
     }
 
     /*
-     * 外层灰色视觉 shell 通常没有稳定 class。
-     * 只跨越搜索专属包装层；遇到无关交互控件或顶部结构边界停止。
+     * 外层包装节点也可能是详情 portal 的长期挂载点。
+     * 只有明确标识为搜索区域的包装层允许整体替换；
+     * 不以“暂时没有无关控件”作为删除无标识祖先的依据。
      */
     for (let depth = 0; depth < 4; depth += 1) {
       const parent =
@@ -560,6 +727,20 @@
       }
     }
     return null;
+  }
+
+  function isRenderedSearchControl(element, windowRef = global) {
+    if (!element || String(element.getAttribute?.('type') || '').toLowerCase() === 'hidden') return false;
+    for (let current = element; current; current = current.parentElement) {
+      if (current.hasAttribute?.('hidden') || current.getAttribute?.('aria-hidden') === 'true') return false;
+      const style = windowRef.getComputedStyle?.(current);
+      if (style?.display === 'none' || style?.visibility === 'hidden' || style?.visibility === 'collapse') return false;
+    }
+    if (typeof element.getBoundingClientRect === 'function') {
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    }
+    return true;
   }
 
   function findSearchOwner(input, targetSite) {
@@ -669,6 +850,24 @@
     }
   }
 
+  function searchKeywordForInput(input, href, siteDomain) {
+    if (typeof input?.value === 'string' && input.value) return input.value;
+    try {
+      const url = new URL(href);
+      if (siteDomain === 'douyin.com') {
+        const match = url.pathname.match(/^\/(?:jingxuan\/)?search\/([^/]+)/);
+        if (match) return decodeURIComponent(match[1]);
+      }
+      const names = siteDomain?.startsWith('google.') ? ['q'] : ['keyword', 'search_query', 'q'];
+      for (const name of names) {
+        if (url.searchParams.has(name)) return url.searchParams.get(name);
+      }
+    } catch (error) {
+      // 地址尚未就绪时仍展示空搜索入口。
+    }
+    return '';
+  }
+
   function setReplacementRootStyle(root) {
     const declarations = {
       'box-sizing': 'border-box',
@@ -676,8 +875,11 @@
       'align-items': 'center',
       'justify-content': 'center',
       width: 'auto',
-      'min-width': '104px',
-      'min-height': '36px',
+      position: 'relative',
+      'z-index': '1',
+      flex: '0 0 auto',
+      'min-width': 'var(--msp-search-min-width, 104px)',
+      'min-height': 'var(--msp-search-min-height, 36px)',
       margin: '0',
       padding: '0',
       border: '0',
@@ -698,17 +900,18 @@
       display: 'inline-flex',
       'align-items': 'center',
       'justify-content': 'center',
-      width: 'auto',
-      'min-width': '104px',
-      'min-height': '36px',
-      padding: '1px 6px',
+      width: 'var(--msp-search-width, min(420px, 28vw))',
+      'min-width': 'var(--msp-search-min-width, 104px)',
+      'min-height': 'var(--msp-search-min-height, 36px)',
+      padding: 'var(--msp-search-padding, 10px 40px 10px 6px)',
       border: '1px solid #000',
       'border-radius': '2px',
       background: '#fff',
       color: '#000',
-      cursor: 'pointer',
-      'font-size': '16px',
-      'font-weight': '600',
+      cursor: 'text',
+      'font-size': 'var(--msp-search-font-size, 16px)',
+      'font-weight': '400',
+      'text-align': 'left',
       'line-height': '1.2',
       opacity: '1',
       visibility: 'visible',
@@ -736,6 +939,64 @@
     const replacementStates = new Set();
     const documentGuardEntries = [];
     const dynamicPopupCandidates = new Set();
+    const searchShellStates = new Map();
+    let searchShellStyle = null;
+
+    function restoreSearchShell(shell, state) {
+      shell.removeAttribute?.(SHELL_ATTR);
+      if (shell.style?.getPropertyValue('display') === 'contents' &&
+          shell.style.getPropertyPriority('display') === 'important') {
+        if (state.value) shell.style.setProperty('display', state.value, state.priority);
+        else shell.style.removeProperty('display');
+      }
+      searchShellStates.delete(shell);
+    }
+
+    function reconcileSearchShells() {
+      const eligible = new Set();
+      const entry = currentReplacementRoot();
+      if (targetSite?.siteDomain === 'douyin.com' && entry) {
+        for (let shell = entry.parentElement, depth = 0; shell && depth < 6; shell = shell.parentElement, depth += 1) {
+          if (DOUYIN_OWNER_STOP_TAGS.has(shell.tagName) ||
+              safeMatches(shell, '[role="navigation"], [role="main"], [role="dialog"], [aria-modal="true"]')) break;
+          if (safeQuery(shell, 'video, canvas, [data-e2e="modal-video-container"], [data-e2e="feed-active-video"]')) break;
+          if (safeQueryAll(shell, DOUYIN_OWNER_GUARD_SELECTOR).some(control =>
+            !entry.contains?.(control) && !isDouyinSearchRelatedControl(control, null, targetSite)
+          )) break;
+          const style = windowRef.getComputedStyle?.(shell);
+          if (shell.hasAttribute?.('hidden') || shell.getAttribute?.('aria-hidden') === 'true' || style?.display === 'none') break;
+          const metadata = `${shell.getAttribute?.('data-e2e') || ''} ${shell.getAttribute?.('class') || ''}`;
+          const decorated = parseFloat(style?.borderTopWidth) > 0 || parseFloat(style?.borderLeftWidth) > 0 ||
+            (style?.backgroundColor && !['transparent', 'rgba(0, 0, 0, 0)'].includes(style.backgroundColor)) ||
+            (style?.boxShadow && style.boxShadow !== 'none');
+          if (/search/i.test(metadata) || decorated) eligible.add(shell);
+        }
+      }
+      for (const [shell, state] of searchShellStates) {
+        if (!eligible.has(shell)) restoreSearchShell(shell, state);
+      }
+      if (eligible.size && !searchShellStyle && documentRef?.createElement) {
+        // Pseudo-elements belong to the native shell, not the replacement button.
+        searchShellStyle = documentRef.createElement('style');
+        searchShellStyle.textContent = `
+          html[${ACTIVE_ATTR}="douyin.com"] [${SHELL_ATTR}="true"]::before,
+          html[${ACTIVE_ATTR}="douyin.com"] [${SHELL_ATTR}="true"]::after {
+            display: none !important; content: none !important;
+          }
+        `;
+        (documentRef.head || documentRef.documentElement)?.appendChild(searchShellStyle);
+      }
+      for (const shell of eligible) {
+        const value = shell.style?.getPropertyValue('display') || '';
+        const priority = shell.style?.getPropertyPriority('display') || '';
+        if (!searchShellStates.has(shell) || value !== 'contents' || priority !== 'important') {
+          searchShellStates.set(shell, { value, priority });
+          shell.style?.setProperty('display', 'contents', 'important');
+        }
+        if (shell.getAttribute?.(SHELL_ATTR) !== 'true') shell.setAttribute?.(SHELL_ATTR, 'true');
+      }
+    }
+
 
     function setActiveSite(site) {
       const root = documentRef?.documentElement;
@@ -942,13 +1203,26 @@
     }
 
     function redirectToMySearchPage(event) {
+      const input = event?.currentTarget;
+      if (!input) return;
       event?.preventDefault?.();
       event?.stopPropagation?.();
       event?.stopImmediatePropagation?.();
-      purgeAllPopups();
-      void sendMessage(chromeApi, {
-        type: 'OPEN_MYSEARCH_PAGE',
-      });
+      // 先让浏览器完成本次点击的原生光标定位，再采集选区。
+      // 异步回调只保留控件引用，不读取派发结束后已失效的 currentTarget。
+      windowRef.setTimeout(() => {
+        const searchContext = {
+          keyword: input.value,
+          selectionStart: input.selectionStart,
+          selectionEnd: input.selectionEnd,
+          selectionDirection: input.selectionDirection,
+        };
+        purgeAllPopups();
+        void sendMessage(chromeApi, {
+          type: 'OPEN_MYSEARCH_PAGE',
+          searchContext,
+        });
+      }, 0);
     }
 
     function existingButton() {
@@ -957,7 +1231,45 @@
       ) || null;
     }
 
-    function replaceOwner(owner) {
+    function forgetReplacementRoot(replacementRoot) {
+      for (const state of Array.from(
+        replacementStates
+      )) {
+        if (state.replacementRoot === replacementRoot) {
+          replacementStates.delete(state);
+        }
+      }
+    }
+
+    function rememberReplacement(
+      owner,
+      replacementRoot
+    ) {
+      forgetReplacementRoot(replacementRoot);
+      replacementStates.add({
+        owner,
+        replacementRoot,
+      });
+    }
+
+    function removeNativeSearchControls(root) {
+      for (const selector of targetSite?.inputSelectors || []) {
+        for (const input of safeQueryAll(root, selector)) {
+          if (input.getAttribute?.(BUTTON_ATTR) !== 'true') removeElement(input);
+        }
+      }
+
+      if (targetSite?.submitSelector) {
+        for (const submit of safeQueryAll(
+          root,
+          targetSite.submitSelector
+        )) {
+          removeElement(submit);
+        }
+      }
+    }
+
+    function replaceOwner(owner, sourceInput) {
       if (
         !owner ||
         !owner.parentNode ||
@@ -966,48 +1278,52 @@
         return null;
       }
 
-      const currentButton = existingButton();
+      let currentButton = existingButton();
       if (currentButton) {
         const currentRoot = currentButton.closest?.(
           `[${ROOT_ATTR}="true"]`
         );
 
-        if (currentRoot && owner === currentRoot) {
-          for (const selector of targetSite.inputSelectors || []) {
-            for (const input of safeQueryAll(
-              currentRoot,
-              selector
-            )) {
-              removeElement(input);
-            }
+        if (!currentRoot) {
+          removeElement(currentButton);
+          currentButton = null;
+        } else {
+          setReplacementRootStyle(currentRoot);
+          setButtonStyle(currentButton);
+          currentButton.value = searchKeywordForInput(sourceInput, windowRef.location?.href, targetSite.siteDomain);
+          currentRoot.setAttribute(
+            SOURCE_ATTR,
+            ownerSource(owner, targetSite)
+          );
+
+          if (
+            owner === currentRoot ||
+            currentRoot.contains?.(owner)
+          ) {
+            removeNativeSearchControls(currentRoot);
+            purgeAllPopups();
+            return currentButton;
           }
 
-          if (targetSite.submitSelector) {
-            for (const submit of safeQueryAll(
-              currentRoot,
-              targetSite.submitSelector
-            )) {
-              removeElement(submit);
-            }
+          const placed = owner.contains?.(currentRoot)
+            ? hoistReplacementOutOfOwner(
+              owner,
+              currentRoot
+            )
+            : relocateReplacementToOwner(
+              owner,
+              currentRoot
+            );
+
+          if (placed) {
+            rememberReplacement(owner, currentRoot);
+            purgeAllPopups();
+            return currentButton;
           }
 
-          purgeAllPopups();
-          return currentButton;
+          forgetReplacementRoot(currentRoot);
+          removeElement(currentRoot);
         }
-
-        if (
-          currentRoot &&
-          hoistReplacementOutOfOwner(owner, currentRoot)
-        ) {
-          purgeAllPopups();
-          return currentButton;
-        }
-
-        if (!currentRoot || owner !== currentRoot) {
-          removeElement(owner);
-        }
-        purgeAllPopups();
-        return currentButton;
       }
 
       const parent = owner.parentNode;
@@ -1021,13 +1337,17 @@
       );
       setReplacementRootStyle(replacementRoot);
 
-      const button = documentRef.createElement('button');
-      button.type = 'button';
-      button.textContent = BUTTON_TEXT;
+      const button = documentRef.createElement('input');
+      button.type = 'text';
+      button.readOnly = true;
+      button.autocomplete = 'off';
+      button.spellcheck = false;
+      button.placeholder = BUTTON_TEXT;
+      button.value = searchKeywordForInput(sourceInput, windowRef.location?.href, targetSite.siteDomain);
       button.setAttribute(BUTTON_ATTR, 'true');
       button.setAttribute(
         'aria-label',
-        '打开 MySearchPage 搜索资料'
+        BUTTON_TEXT
       );
       setButtonStyle(button);
 
@@ -1037,17 +1357,14 @@
         true
       );
       button.addEventListener?.('keydown', event => {
-        if (event.key === 'Enter' || event.key === ' ') {
+        if (event.key === 'Enter') {
           redirectToMySearchPage(event);
         }
       }, true);
 
       replacementRoot.appendChild(button);
       parent.replaceChild(replacementRoot, owner);
-      replacementStates.add({
-        owner,
-        replacementRoot,
-      });
+      rememberReplacement(owner, replacementRoot);
 
       purgeDynamicPopupSubtree(documentRef);
       purgeAllPopups();
@@ -1066,7 +1383,7 @@
           inputs.add(element);
         }
       }
-      return inputs;
+      return new Set(Array.from(inputs).filter(input => input.getAttribute?.(BUTTON_ATTR) !== 'true'));
     }
 
     function scan(root = documentRef, options = {}) {
@@ -1087,11 +1404,13 @@
       for (const input of collectSearchInputs(root)) {
         if (!input?.parentNode) continue;
 
+        if (targetSite.requireVisibleInput && !isRenderedSearchControl(input, windowRef)) continue;
         const owner = findSearchOwner(input, targetSite);
         if (!owner?.parentNode) continue;
-        if (replaceOwner(owner)) replacements += 1;
+        if (replaceOwner(owner, input)) replacements += 1;
       }
 
+      reconcileSearchShells();
       if (options.skipFinalFullPurge !== true) {
         purgeAllPopups();
       }
@@ -1130,6 +1449,11 @@
           'style',
           'hidden',
           'aria-hidden',
+          'name',
+          'type',
+          'role',
+          'placeholder',
+          'aria-label',
           'data-e2e',
         ],
       });
@@ -1160,6 +1484,9 @@
       observer = null;
       stopPopupSweep();
       removeDocumentGuards();
+      for (const [shell, state] of searchShellStates) restoreSearchShell(shell, state);
+      removeElement(searchShellStyle);
+      searchShellStyle = null;
       restoreReplacements();
       dynamicPopupCandidates.clear();
       targetSite = null;
@@ -1254,15 +1581,19 @@
     ROOT_ATTR,
     SOURCE_ATTR,
     ACTIVE_ATTR,
+    SHELL_ATTR,
+    isRenderedSearchControl,
     BUTTON_TEXT,
     POPUP_SWEEP_HOVER_WINDOW_MS,
     DEFAULT_HIGH_RISK_DOMAINS,
     SITE_CONFIGS,
+    searchKeywordForInput,
     getTargetSite,
     hostMatchesDomain,
     findDouyinSearchOwner,
     isLikelyDynamicSearchPopup,
     hoistReplacementOutOfOwner,
+    relocateReplacementToOwner,
     collectObserverBatchPlan,
     createController,
   });

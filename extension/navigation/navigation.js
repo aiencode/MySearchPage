@@ -1141,46 +1141,57 @@
         const MYSEARCH_FOCUS_HASH = '#msp-focus-search';
         let pendingMySearchFocus = false;
 
-        function handleMySearchFocusHash() {
-            if (window.location.hash !== MYSEARCH_FOCUS_HASH) {
-                return false;
-            }
+        let mySearchFocusReady = false;
 
-            if (document.hidden) {
+        function handleMySearchFocusHash() {
+            const focusHash = window.location.hash;
+            const context = globalThis.MySearchNavigation?.parseFocusHash(focusHash);
+            if (!context) return false;
+
+            if (!mySearchFocusReady || !searchInput) {
                 pendingMySearchFocus = true;
                 return true;
             }
 
+            pendingMySearchFocus = true;
+            searchInput.value = context.keyword;
+            lastInputValue = searchInput.value;
+            lastCursorPosition = context.selectionStart;
+            searchInput.setSelectionRange(context.selectionStart, context.selectionEnd, context.selectionDirection);
+            if (document.hidden || (typeof document.hasFocus === 'function' && !document.hasFocus())) return true;
             pendingMySearchFocus = false;
-            if (searchInput) {
-                searchInput.value = '';
-                lastInputValue = '';
-                lastCursorPosition = 0;
-                enhancedFocusSearchInput(false);
-            }
+            searchInput.focus();
+            searchInput.setSelectionRange(context.selectionStart, context.selectionEnd, context.selectionDirection);
 
-            try {
-                window.history.replaceState(
-                    null,
-                    document.title,
-                    window.location.pathname + window.location.search
-                );
-            } catch (error) {
-                console.warn('清理 MySearchPage 聚焦标记失败:', error);
-            }
-
+            setTimeout(() => {
+                if (window.location.hash !== focusHash) return;
+                if (searchInput.value === context.keyword) {
+                    if (document.hidden || document.activeElement !== searchInput ||
+                        (typeof document.hasFocus === 'function' && !document.hasFocus())) {
+                        pendingMySearchFocus = true;
+                        return;
+                    }
+                    searchInput.setSelectionRange(context.selectionStart, context.selectionEnd, context.selectionDirection);
+                    lastCursorPosition = context.selectionStart;
+                }
+                pendingMySearchFocus = false;
+                try {
+                    window.history.replaceState(null, document.title, window.location.pathname + window.location.search);
+                } catch (error) {
+                    console.warn('清理 MySearchPage 聚焦标记失败:', error);
+                }
+            }, 0);
             return true;
         }
 
-        window.addEventListener(
-            'hashchange',
-            handleMySearchFocusHash
-        );
-        document.addEventListener('visibilitychange', function() {
-            if (!document.hidden && pendingMySearchFocus) {
-                handleMySearchFocusHash();
-            }
+        window.addEventListener('hashchange', handleMySearchFocusHash);
+        window.addEventListener('focus', function() {
+            if (pendingMySearchFocus) handleMySearchFocusHash();
         });
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden && pendingMySearchFocus) handleMySearchFocusHash();
+        });
+
         
         // 智能搜索框定位函数 - 不仅定位到搜索框，还保持光标位置
         function smartFocusSearchInput() {
@@ -4460,8 +4471,8 @@
                 
                 // 初始化增强的搜索框功能
                 initializeSearchInputEnhancements();
-
-                // 从高风险平台的自绘入口打开时，清空并聚焦自有搜索框。
+                mySearchFocusReady = true;
+                // 从站点搜索入口打开时，恢复关键词、焦点和选区。
                 handleMySearchFocusHash();
                 
                 // 确保UI更新

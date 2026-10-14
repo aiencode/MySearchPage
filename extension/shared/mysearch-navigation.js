@@ -32,10 +32,50 @@
     }
   }
 
-  function buildFocusUrl(url) {
+  function normalizeSearchContext(context) {
+    if (!context || typeof context.keyword !== 'string' || context.keyword.length > 8192) return null;
+    const keyword = context.keyword;
+    const position = (value, fallback) => Number.isInteger(value)
+      ? Math.max(0, Math.min(keyword.length, value)) : fallback;
+    const start = position(context.selectionStart, keyword.length);
+    const end = position(context.selectionEnd, start);
+    return {
+      keyword,
+      selectionStart: Math.min(start, end),
+      selectionEnd: Math.max(start, end),
+      selectionDirection: ['forward', 'backward', 'none'].includes(context.selectionDirection)
+        ? context.selectionDirection : 'none',
+    };
+  }
+
+  function parseFocusHash(hash) {
+    if (hash === FOCUS_HASH) return normalizeSearchContext({ keyword: '', selectionStart: 0 });
+    if (typeof hash !== 'string' || !hash.startsWith(`${FOCUS_HASH}?`)) return null;
+    const params = new URLSearchParams(hash.slice(FOCUS_HASH.length + 1));
+    if (!params.has('keyword')) return null;
+    const position = name => params.has(name) ? Number(params.get(name)) : undefined;
+    return normalizeSearchContext({
+      keyword: params.get('keyword'),
+      selectionStart: position('selectionStart'),
+      selectionEnd: position('selectionEnd'),
+      selectionDirection: params.get('selectionDirection'),
+    });
+  }
+
+  function buildFocusUrl(url, searchContext) {
     try {
       const result = new URL(url);
       result.hash = FOCUS_HASH;
+      if (searchContext !== undefined) {
+        const context = normalizeSearchContext(searchContext);
+        if (!context) return '';
+        result.hash = `${FOCUS_HASH}?${new URLSearchParams({
+          keyword: context.keyword,
+          selectionStart: String(context.selectionStart),
+          selectionEnd: String(context.selectionEnd),
+          selectionDirection: context.selectionDirection,
+        })}`;
+      }
       return result.href;
     } catch (error) {
       return '';
@@ -50,7 +90,7 @@
     }
   }
 
-  async function openMySearchPage(chromeApi, senderTab) {
+  async function openMySearchPage(chromeApi, senderTab, searchContext) {
     const baseUrl = getSearchPageUrl(chromeApi);
     if (
       !baseUrl ||
@@ -59,8 +99,11 @@
       return { success: false, reason: 'MYSEARCH_PAGE_UNAVAILABLE' };
     }
 
+    const focusUrl = buildFocusUrl(baseUrl, searchContext);
+    if (!focusUrl) return { success: false, reason: 'INVALID_SEARCH_CONTEXT' };
+
     const createProperties = {
-      url: buildFocusUrl(baseUrl),
+      url: focusUrl,
       active: true,
     };
     if (Number.isInteger(senderTab?.id)) {
@@ -87,6 +130,8 @@
     SEARCH_PAGE_PATH,
     FOCUS_HASH,
     isMySearchPageUrl,
+    normalizeSearchContext,
+    parseFocusHash,
     buildFocusUrl,
     getSearchPageUrl,
     openMySearchPage,

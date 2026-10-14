@@ -1229,7 +1229,8 @@ async function handleMessage(message, sender, sendResponse) {
       case 'OPEN_MYSEARCH_PAGE': {
         const result = await globalThis.MySearchNavigation?.openMySearchPage(
           chrome,
-          sender?.tab
+          sender?.tab,
+          message.searchContext
         );
         sendResponse(result || {
           success: false,

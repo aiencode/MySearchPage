@@ -10,13 +10,7 @@ html[data-msp-native-search-active="douyin.com"]
 html[data-msp-native-search-active="douyin.com"]
   [data-e2e*="search"] input,
 html[data-msp-native-search-active="douyin.com"]
-  [data-e2e="searchbar-button"],
-html[data-msp-native-search-active="douyin.com"]
-  [data-e2e="searchbar-container"],
-html[data-msp-native-search-active="douyin.com"]
-  [data-e2e="searchbar"],
-html[data-msp-native-search-active="douyin.com"]
-  [data-e2e="search-box"] {
+  [data-e2e="searchbar-button"] {
   display: none !important;
   visibility: hidden !important;
   pointer-events: none !important;
@@ -81,11 +75,19 @@ html[data-msp-native-search-active="xiaohongshu.com"]
 }
 
 [data-msp-native-search-root="true"] {
+  --msp-search-width: min(420px, 28vw);
+  --msp-search-min-width: 104px;
+  --msp-search-min-height: 36px;
+  --msp-search-padding: 10px 40px 10px 6px;
+  --msp-search-font-size: 16px;
   box-sizing: border-box !important;
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
   width: auto !important;
+  position: relative !important;
+  z-index: 1 !important;
+  flex: 0 0 auto !important;
   min-width: 104px !important;
   min-height: 36px !important;
   margin: 0 !important;
@@ -102,16 +104,18 @@ html[data-msp-native-search-active="xiaohongshu.com"]
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
+  width: var(--msp-search-width) !important;
   min-width: 104px !important;
   min-height: 36px !important;
-  padding: 1px 6px !important;
+  padding: var(--msp-search-padding) !important;
   border: 1px solid #000 !important;
   border-radius: 2px !important;
   background: #fff !important;
   color: #000 !important;
-  cursor: pointer !important;
-  font-size: 16px !important;
-  font-weight: 600 !important;
+  cursor: text !important;
+  font-size: var(--msp-search-font-size) !important;
+  font-weight: 400 !important;
+  text-align: left !important;
   line-height: 1.2 !important;
   opacity: 1 !important;
   visibility: visible !important;
@@ -119,6 +123,13 @@ html[data-msp-native-search-active="xiaohongshu.com"]
 }
 
 @media (max-width: 768px) {
+  [data-msp-native-search-root="true"] {
+    --msp-search-width: min(280px, 45vw);
+    --msp-search-min-width: 88px;
+    --msp-search-min-height: 30px;
+    --msp-search-padding: 2px 26px 2px 2px;
+    --msp-search-font-size: 12px;
+  }
   [data-msp-native-search-root="true"],
   [data-msp-native-search-button="true"] {
     min-width: 88px !important;
@@ -126,7 +137,7 @@ html[data-msp-native-search-active="xiaohongshu.com"]
   }
 
   [data-msp-native-search-button="true"] {
-    padding: 0 2px !important;
+    padding: var(--msp-search-padding) !important;
     font-size: 12px !important;
   }
 }

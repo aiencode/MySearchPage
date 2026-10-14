@@ -18,6 +18,8 @@
   const BLOCKED_CARD_VALUE_ATTR = 'data-mysearch-blocked-card-value';
   const BLOCKED_CARD_PLACEHOLDER_CLASS =
     'mysearch-blocked-card-placeholder';
+  const BLOCKED_CARD_LEAF_PLACEHOLDER_ATTR =
+    'data-mysearch-blocked-leaf-placeholder';
   const NOTICE_ID = 'mysearch-blocking-notice';
   const FEEDBACK_PAUSE_ID = 'mysearch-blocking-feedback-pause';
   const TRANSIENT_FEEDBACK_IMAGE_ID =
@@ -811,6 +813,39 @@
       .trim();
   }
 
+  // The replacement search entry is a safe exit and must not match local rules.
+  function isSearchRedirectControl(element) {
+    if (!isElement(element)) return false;
+    if (element.closest?.('[data-msp-native-search-root], [data-msp-native-search-button]')) return true;
+    const site = global.MySearchNativeRedirect?.getTargetSite?.(domain(), rules.highRiskDomains);
+    const selector = site?.inputSelectors?.join(',');
+    return Boolean(selector && element.matches?.(selector)) || Boolean(
+      site?.submitSelector && element.matches?.(site.submitSelector)
+    );
+  }
+
+  function containsSearchRedirectControl(element) {
+    if (!isElement(element)) return false;
+    if (element.querySelector?.('[data-msp-native-search-root], [data-msp-native-search-button]')) return true;
+    const site = global.MySearchNativeRedirect?.getTargetSite?.(domain(), rules.highRiskDomains);
+    return Boolean(site?.inputSelectors?.length && element.querySelector?.(site.inputSelectors.join(',')));
+  }
+
+  function isSharedControlContainer(element, adapterEntry = depthAdapterEntry()) {
+    if (!isElement(element)) return false;
+    const cards = adapterEntry && searchMediaCardSelector(adapterEntry);
+    const roots = adapterEntry && searchMediaRootSelector(adapterEntry);
+    if (cards && element.matches?.(cards)) return false;
+    if (roots && element.closest?.(roots)) return false;
+    if (element.matches?.('article, li')) return false;
+    const controls = Array.from(element.querySelectorAll?.(INTERACTIVE_SELECTOR) || [])
+      .filter(control => {
+        const parent = control.parentElement?.closest?.(INTERACTIVE_SELECTOR);
+        return !parent || parent === element || !element.contains?.(parent);
+      });
+    return controls.length > 1;
+  }
+
   function isBlockingPageContainer(element, adapterEntry = depthAdapterEntry()) {
     if (!isElement(element)) return false;
     if (element === global.document?.documentElement || element === global.document?.head ||
@@ -822,7 +857,7 @@
     if (element.querySelector?.('main, [role="main"], nav, aside, [role="navigation"]')) return true;
     // 小红书首屏尚未挂载 feeds-container 时，应用/搜索布局仍不是卡片。
     if (adapterEntry?.name === 'xiaohongshu' && element.matches?.('.search-layout, .search-page')) return true;
-    return false;
+    return containsSearchRedirectControl(element) || isSharedControlContainer(element, adapterEntry);
   }
 
   function isCompactTextComponent(element) {
@@ -844,7 +879,7 @@
   }
 
   function isGenericBlockingCandidate(element) {
-    if (!isElement(element) || isBlockingFeedbackNode(element) || isBlockingPageContainer(element)) return false;
+    if (!isElement(element) || isSearchRedirectControl(element) || isBlockingFeedbackNode(element) || isBlockingPageContainer(element)) return false;
     if (element.matches?.(CANDIDATE_SELECTOR)) return true;
     return isCompactTextComponent(element);
   }
@@ -989,6 +1024,7 @@
   function resultCardForElement(element, adapterEntry = depthAdapterEntry()) {
     if (
       !isElement(element) ||
+      isSearchRedirectControl(element) ||
       isBlockingFeedbackNode(element) ||
       detailRootForElement(element, adapterEntry)
     ) {
@@ -1036,7 +1072,7 @@
   }
 
   function hideBlockedCard(card, match) {
-    if (!isElement(card) || !match || isBlockingPageContainer(card)) return false;
+    if (!isElement(card) || !match || isSearchRedirectControl(card) || isBlockingPageContainer(card)) return false;
     const existing = blockedCardStates.get(card);
     if (existing) {
       if (existing.leaf) {
@@ -1069,6 +1105,7 @@
       String(card.tagName || '').toUpperCase()
     );
     if (isLeafControl && card.parentNode) {
+      placeholder.setAttribute(BLOCKED_CARD_LEAF_PLACEHOLDER_ATTR, '');
       const parent = card.parentNode;
       const nextSibling = card.nextSibling;
       parent.replaceChild(placeholder, card);
@@ -2228,8 +2265,27 @@
         user-select: none !important;
       }
       [${BLOCKED_CARD_ATTR}] {
-        display: block !important;
-        min-height: 42px !important;
+        display: inline-flex !important;
+        width: fit-content !important;
+        inline-size: fit-content !important;
+        max-width: 100% !important;
+        max-inline-size: 100% !important;
+        min-width: 0 !important;
+        min-inline-size: 0 !important;
+        height: auto !important;
+        block-size: auto !important;
+        min-height: 0 !important;
+        min-block-size: 0 !important;
+        max-height: none !important;
+        max-block-size: none !important;
+        flex: 0 0 auto !important;
+        position: relative !important;
+        inset: auto !important;
+        z-index: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        transform: none !important;
+        overflow: hidden !important;
         box-sizing: border-box !important;
         filter: none !important;
         opacity: 1 !important;
@@ -2242,8 +2298,17 @@
         user-select: none !important;
       }
       .${BLOCKED_CARD_PLACEHOLDER_CLASS} {
-        display: flex !important;
-        min-height: 42px !important;
+        width: 100% !important;
+        inline-size: 100% !important;
+        max-width: 100% !important;
+        max-inline-size: 100% !important;
+        min-width: 0 !important;
+        min-inline-size: 0 !important;
+        height: auto !important;
+        min-height: 0 !important;
+        margin: 0 !important;
+        position: static !important;
+        transform: none !important;
         align-items: center !important;
         justify-content: center !important;
         box-sizing: border-box !important;
@@ -2252,6 +2317,22 @@
         background: #f2f2f2 !important;
         font: 14px/1.2 Arial, sans-serif !important;
         pointer-events: none !important;
+      }
+      .${BLOCKED_CARD_PLACEHOLDER_CLASS}[${BLOCKED_CARD_LEAF_PLACEHOLDER_ATTR}] {
+        display: inline-flex !important;
+        width: fit-content !important;
+        inline-size: fit-content !important;
+        max-width: 100% !important;
+        max-inline-size: 100% !important;
+        flex: 0 0 auto !important;
+        align-self: flex-start !important;
+        justify-self: start !important;
+      }
+      @media (max-width: 768px) {
+        .${BLOCKED_CARD_PLACEHOLDER_CLASS} { padding: 1px 2px !important; font-size: 12px !important; }
+      }
+      @media (max-width: 480px) {
+        .${BLOCKED_CARD_PLACEHOLDER_CLASS} { padding: 1px !important; }
       }
       #${NOTICE_ID} {
         position: fixed !important;
@@ -2541,6 +2622,7 @@
 
     const adapter = depthAdapterEntry();
     if (detailRootForElement(target, adapter)) return null;
+    if (isSearchRedirectControl(target)) return null;
 
     const blockedCard = isElement(target)
       ? target.closest?.(`[${BLOCKED_CARD_ATTR}]`)
@@ -2568,6 +2650,8 @@
 
     let element = isElement(target) ? target : target?.parentElement;
     for (let depth = 0; element && depth < 9; depth += 1, element = element.parentElement) {
+      if (isBlockingPageContainer(element, adapter)) break;
+      if (isSearchRedirectControl(element)) return null;
       const href = element.matches?.('a[href], area[href], [data-href], [data-url]')
         ? element.getAttribute('href') || element.getAttribute('data-href') || element.getAttribute('data-url')
         : '';

@@ -216,6 +216,145 @@ test('Douyin 仅提升到明确搜索 shell，保留无标识的未来详情挂�
   assert.equal(redirect.findDouyinSearchOwner(input, site), visualShell);
 });
 
+test('Douyin 共同 owner 含关闭控件时只替换 input 分支', () => {
+  const selectorParts = selector =>
+    String(selector || '')
+      .split(',')
+      .map(item => item.trim());
+
+  const input = {
+    parentElement: null,
+    parentNode: null,
+    textContent: '',
+    getAttribute(name) {
+      return name === 'data-e2e'
+        ? 'searchbar-input'
+        : null;
+    },
+    matches(selector) {
+      return selectorParts(selector).some(item =>
+        item.startsWith('input') ||
+        item.endsWith(' input')
+      );
+    },
+    closest() {
+      return null;
+    },
+    contains(node) {
+      return node === this;
+    },
+  };
+
+  const submit = {
+    parentElement: null,
+    parentNode: null,
+    textContent: '搜索',
+    getAttribute(name) {
+      return name === 'data-e2e'
+        ? 'searchbar-button'
+        : null;
+    },
+    matches(selector) {
+      const parts = selectorParts(selector);
+      return parts.includes('button') ||
+        parts.includes(
+          '[data-e2e="searchbar-button"]'
+        );
+    },
+    contains(node) {
+      return node === this;
+    },
+  };
+
+  const close = {
+    parentElement: null,
+    parentNode: null,
+    textContent: '×',
+    getAttribute(name) {
+      return name === 'aria-label'
+        ? '关闭搜索结果'
+        : null;
+    },
+    matches(selector) {
+      const parts = selectorParts(selector);
+      return parts.includes('button') ||
+        parts.includes('[aria-label*="关闭"]');
+    },
+    contains(node) {
+      return node === this;
+    },
+  };
+
+  const inputBranch = {
+    tagName: 'DIV',
+    parentElement: null,
+    parentNode: null,
+    contains(node) {
+      return node === this || node === input;
+    },
+    querySelector(selector) {
+      return selector.includes('input')
+        ? input
+        : null;
+    },
+    querySelectorAll() {
+      return [input];
+    },
+    matches() {
+      return false;
+    },
+  };
+
+  const sharedOwner = {
+    tagName: 'DIV',
+    parentElement: null,
+    parentNode: null,
+    contains(node) {
+      return node === this ||
+        node === inputBranch ||
+        node === input ||
+        node === submit ||
+        node === close;
+    },
+    querySelector(selector) {
+      if (
+        selector ===
+        '[data-e2e="searchbar-button"]'
+      ) {
+        return submit;
+      }
+      if (selector.includes('input')) return input;
+      return null;
+    },
+    querySelectorAll() {
+      return [input, submit, close];
+    },
+    matches() {
+      return false;
+    },
+  };
+
+  input.parentElement = inputBranch;
+  input.parentNode = inputBranch;
+  inputBranch.parentElement = sharedOwner;
+  inputBranch.parentNode = sharedOwner;
+  submit.parentElement = sharedOwner;
+  submit.parentNode = sharedOwner;
+  close.parentElement = sharedOwner;
+  close.parentNode = sharedOwner;
+
+  const site = redirect.getTargetSite(
+    'www.douyin.com',
+    ['douyin.com']
+  );
+
+  assert.equal(
+    redirect.findDouyinSearchOwner(input, site),
+    inputBranch,
+    '共享外壳中的关闭控件不能随搜索输入一起被替换'
+  );
+});
+
 test('Douyin 原生搜索 CSS 使用 display none，不再保留占位', () => {
   const selectorStart = redirectCss.indexOf(
     'input[data-e2e="searchbar-input"]'
@@ -240,6 +379,26 @@ test('Douyin 原生搜索 CSS 使用 display none，不再保留占位', () => {
     ruleStart + 1,
     ruleEnd
   );
+  const selectorBlock = redirectCss.slice(
+    selectorStart,
+    ruleStart
+  );
+
+  assert.match(
+    selectorBlock,
+    /\[data-e2e="searchbar-button"\]/
+  );
+  for (const sharedOwnerSelector of [
+    '[data-e2e="searchbar-container"]',
+    '[data-e2e="searchbar"]',
+    '[data-e2e="search-box"]',
+  ]) {
+    assert.equal(
+      selectorBlock.includes(sharedOwnerSelector),
+      false,
+      `${sharedOwnerSelector} 不能整体隐藏`
+    );
+  }
   assert.match(
     declarationBlock,
     /display:\s*none\s*!important/
@@ -295,6 +454,74 @@ test('Douyin SPA 将自绘入口包回原生 owner 时会重新提升入口', ()
   assert.equal(host.child, replacementRoot);
   assert.equal(replacementRoot.parentNode, host);
   assert.equal(owner.parentNode, null);
+});
+
+test('Douyin SPA 关闭详情后把旧入口迁移到当前 owner', () => {
+  const oldHost = {
+    child: null,
+    removeChild(child) {
+      assert.equal(child, replacementRoot);
+      this.child = null;
+      child.parentNode = null;
+    },
+  };
+  const replacementRoot = {
+    parentNode: oldHost,
+    contains() {
+      return false;
+    },
+  };
+  oldHost.child = replacementRoot;
+
+  const newHost = {
+    children: [],
+    replaceChild(next, previous) {
+      const index = this.children.indexOf(previous);
+      assert.notEqual(index, -1);
+      next.parentNode?.removeChild?.(next);
+      this.children[index] = next;
+      next.parentNode = this;
+      previous.parentNode = null;
+    },
+  };
+  const close = {
+    id: 'search-page-close',
+    parentNode: newHost,
+  };
+  const owner = {
+    parentNode: newHost,
+    contains() {
+      return false;
+    },
+  };
+  newHost.children = [close, owner];
+
+  assert.equal(
+    redirect.relocateReplacementToOwner(
+      owner,
+      replacementRoot
+    ),
+    true
+  );
+  assert.deepEqual(
+    newHost.children,
+    [close, replacementRoot]
+  );
+  assert.equal(replacementRoot.parentNode, newHost);
+  assert.equal(owner.parentNode, null);
+  assert.equal(oldHost.child, null);
+  assert.match(
+    controllerSource,
+    /relocateReplacementToOwner\(\s*owner,\s*currentRoot\s*\)/
+  );
+  assert.match(
+    controllerSource,
+    /rememberReplacement\(\s*owner,\s*currentRoot\s*\)/
+  );
+  assert.doesNotMatch(
+    controllerSource,
+    /if \(!currentRoot \|\| owner !== currentRoot\) \{\s*removeElement\(owner\)/
+  );
 });
 
 test('动态 class 浮层只在搜索入口附近且具有诱因文字时命中', () => {
@@ -491,4 +718,49 @@ test('Observer 默认使用批次单遍路径且旧 A0 路径已移除', () => {
     controllerSource,
     /observerSinglePassAblation|OBSERVER_SINGLE_PASS_ABLATION|mutation_single_pass|mutation_batch/
   );
+});
+
+test('Google 两种域名都替换 q 输入框，且不加入高风险阻断名单', () => {
+  for (const host of ['www.google.com', 'www.google.com.hk']) {
+    const site = redirect.getTargetSite(host, []);
+    assert.ok(site);
+    assert.deepEqual(site.inputSelectors, ['input[name="q"]', 'textarea[name="q"]']);
+    assert.ok(site.ownerSelectors.includes('[role="search"]'));
+  }
+  assert.ok(!redirect.DEFAULT_HIGH_RISK_DOMAINS.includes('google.com'));
+  assert.equal(redirect.getTargetSite('google.com.example.org', []), null);
+});
+
+test('Google 渲染边界排除隐藏副本、hidden input 和零尺寸输入', () => {
+  const node = (attrs = {}, parentElement = null, style = {}, rect = { width: 200, height: 30 }) => ({
+    parentElement, style,
+    getAttribute(name) { return attrs[name] ?? null; },
+    hasAttribute(name) { return Object.hasOwn(attrs, name); },
+    getBoundingClientRect() { return rect; },
+  });
+  const windowRef = { getComputedStyle(element) { return element.style; } };
+  assert.equal(redirect.isRenderedSearchControl(node(), windowRef), true);
+  assert.equal(redirect.isRenderedSearchControl(node({ type: 'hidden' }), windowRef), false);
+  assert.equal(redirect.isRenderedSearchControl(node({}, node({ hidden: '' })), windowRef), false);
+  assert.equal(redirect.isRenderedSearchControl(node({}, node({ 'aria-hidden': 'true' })), windowRef), false);
+  assert.equal(redirect.isRenderedSearchControl(node({}, node({}, null, { display: 'none' })), windowRef), false);
+  assert.equal(redirect.isRenderedSearchControl(node({}, null, {}, { width: 0, height: 0 }), windowRef), false);
+});
+
+test('动态挂载的搜索身份属性也触发 Observer 扫描', () => {
+  const filter = controllerSource.match(/attributeFilter:\s*\[([\s\S]*?)\]/)[1];
+  for (const name of ['name', 'type', 'role', 'placeholder', 'aria-label']) {
+    assert.ok(filter.includes(`'${name}'`), name);
+  }
+});
+
+test('只读入口优先保留原生值，缺失时从现有搜索 URL 恢复', () => {
+  assert.equal(redirect.searchKeywordForInput({ value: '新的 蓝牙关键词' }, 'https://www.google.com/search?q=old', 'google.com'), '新的 蓝牙关键词');
+  assert.equal(redirect.searchKeywordForInput({ value: '' }, 'https://www.google.com/search?q=ESP32+%E8%93%9D%E7%89%99', 'google.com'), 'ESP32 蓝牙');
+  assert.equal(redirect.searchKeywordForInput({ value: '' }, 'https://www.douyin.com/jingxuan/search/ESP32%20%E8%93%9D%E7%89%99', 'douyin.com'), 'ESP32 蓝牙');
+  assert.equal(redirect.searchKeywordForInput({ value: '' }, 'https://www.youtube.com/results?search_query=ESP32', 'youtube.com'), 'ESP32');
+  assert.equal(redirect.searchKeywordForInput({ value: '' }, 'https://www.google.com/', 'google.com'), '');
+  assert.match(controllerSource, /createElement\('input'\)/);
+  assert.match(controllerSource, /button\.readOnly = true/);
+  assert.match(controllerSource, /input\.getAttribute\?\.\(BUTTON_ATTR\) !== 'true'/);
 });

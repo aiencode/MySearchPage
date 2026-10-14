@@ -1235,7 +1235,7 @@ test('Douyin detail pause controls skip broad interaction matching while real pa
   );
   assert.match(
     controller,
-    /function getInteractionMatch\(target\) \{\s*ensurePageStateCurrent\(\);\s*const pageMatch = currentPageBlockingMatch\(\);\s*if \(pageMatch\) return pageMatch;\s*const adapter = depthAdapterEntry\(\);\s*if \(detailRootForElement\(target, adapter\)\) return null;\s*const blockedCard/
+    /function getInteractionMatch\(target\) \{\s*ensurePageStateCurrent\(\);\s*const pageMatch = currentPageBlockingMatch\(\);\s*if \(pageMatch\) return pageMatch;\s*const adapter = depthAdapterEntry\(\);\s*if \(detailRootForElement\(target, adapter\)\) return null;\s*if \(isSearchRedirectControl\(target\)\) return null;\s*const blockedCard/
   );
   assert.match(
     controller,
@@ -1827,6 +1827,18 @@ test('keyword-matched search cards replace original content with a low-stimulus 
     /\[\$\{BLOCKED_ATTR\}\]:not\(\[\$\{BLOCKED_CARD_ATTR\}\]\)/
   );
   assert.match(controller, /restoreBlockedCards\(\);\s*\n\s*rules = rulesApi/);
+});
+
+test('blocked search placeholders use compact content sizing and protect replacement controls', () => {
+  const controller = read('extension/content/blocking-controller.js');
+  assert.match(controller, /data-msp-native-search-root/);
+  assert.match(controller, /function isSearchRedirectControl\(element\)/);
+  assert.match(controller, /function containsSearchRedirectControl\(element\)/);
+  assert.match(controller, /function isSharedControlContainer\(element/);
+  assert.match(controller, /width: fit-content !important;/);
+  assert.match(controller, /height: auto !important;/);
+  assert.match(controller, /min-height: 0 !important;/);
+  assert.match(controller, /z-index: 0 !important;/);
 });
 
 test('Douyin current jingxuan search route is treated as a result page', () => {
