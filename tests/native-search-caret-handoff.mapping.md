@@ -44,3 +44,9 @@ node --max-old-space-size=64 -e "require('./tests/native-search-caret-handoff.te
 - 前面的独立浏览器扩展测试曾伴随用户报告的死机/应用退出，未认定原因，未认定那套端到端测试通过。相应重型脚本已移除。
 - 临时诊断页、面板、挂载脚本和预览文件已回收；实际页面上的自检面板/URL标记已清除。验证 JSON 与日志仅保存在本轮 scratch。
 - 后续默认后台操作，不再以窗口置顶或前台全局按键作为验证方式。
+
+## 持续开发回归入口
+
+完整自然语言Test Case见[搜索修复开发测试](native-search-regression.test-cases.md)，编号TC-NS-01至TC-NS-16，列明前置条件、操作、预期、自动化映射及发布验收边界。
+
+统一运行：`node --max-old-space-size=64 tests/native-search-regression.run.cjs`。现有位置交接测试已增强为经过生产`handleMessage`的`OPEN_MYSEARCH_PAGE`分支，避免直接调用导航工具漏测后台丢参；另新增局部屏蔽、紧凑占位、Google扫描和抖音外壳生命周期测试。当前63项在工作区及已提交HEAD快照均通过，具体结果见Test Case文档。

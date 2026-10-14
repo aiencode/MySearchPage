@@ -6,6 +6,18 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const navigation = require('../extension/shared/mysearch-navigation.js');
+const { read: readProduction, loadFunctions } = require('./native-search-test-support.cjs');
+const backgroundSource = readProduction('extension/background/ua-controller.js');
+function backgroundHarness(chromeApi, navigationApi = navigation) {
+  const { handleMessage } = loadFunctions(backgroundSource, [
+    ['handleMessage', '// ============================================\n// 存储变更监听'],
+  ], { chrome: chromeApi, MySearchNavigation: navigationApi, console: { error() {} } });
+  const responses = [];
+  return { responses, async send(message, sender = { tab: { id: 9 } }) {
+    await handleMessage(message, sender, response => responses.push(response));
+    return responses.at(-1);
+  } };
+}
 const read = file => fs.readFileSync(path.resolve(__dirname, '..', file), 'utf8');
 const runtime = read('extension/content/native-search-redirect-runtime.js');
 const page = read('extension/navigation/navigation.js');
@@ -50,7 +62,7 @@ function targetHarness(hash, hidden = false) {
 }
 
 for (const position of [0, 6, 'ESP32 蓝牙😀连接 & 参数#?'.length]) {
-  test(`点击位置 ${position} 经消息、新标签 URL 和目标恢复函数完整传递`, async () => {
+  test(`TC-NS-11 点击位置 ${position} 经生产后台消息分支、新标签 URL 和目标恢复函数完整传递`, async () => {
     const keyword = 'ESP32 蓝牙😀连接 & 参数#?';
     const creates = [];
     const pending = [];
@@ -59,12 +71,13 @@ for (const position of [0, 6, 'ESP32 蓝牙😀连接 & 参数#?'.length]) {
     const chromeApi = { runtime: { getURL: file => `chrome-extension://fixture/${file}` }, tabs: {
       async create(properties) { creates.push(properties); return { id: 42 }; },
     } };
+    const background = backgroundHarness(chromeApi);
     const handler = vm.runInNewContext(`(${redirectFunction})`, {
       windowRef: { setTimeout(callback) { callback(); } },
       chromeApi, purgeAllPopups() {},
       sendMessage(api, message) {
         assert.equal(message.type, 'OPEN_MYSEARCH_PAGE');
-        pending.push(navigation.openMySearchPage(api, { id: 9 }, message.searchContext));
+        pending.push(background.send(message));
       },
     }, { timeout: 500 });
     handler({ currentTarget: input, preventDefault() { prevented++; }, stopPropagation() {}, stopImmediatePropagation() {} });
@@ -73,6 +86,8 @@ for (const position of [0, 6, 'ESP32 蓝牙😀连接 & 参数#?'.length]) {
     assert.equal(creates.length, 1);
     assert.equal(creates[0].active, true);
     assert.equal(creates[0].openerTabId, 9);
+    assert.equal(background.responses.length, 1);
+    assert.equal(background.responses[0].opened, true);
     const url = new URL(creates[0].url);
     assert.equal(url.pathname, '/navigation/navigation.html');
     const target = targetHarness(url.hash);
@@ -213,4 +228,79 @@ test('延迟恢复时窗口失焦则保留交接，再次聚焦后恢复并清�
   assert.equal(target.sandbox.window.location.hash, '');
   assert.match(page, /window\.addEventListener\('focus', function\(\) \{\s*if \(pendingMySearchFocus\) handleMySearchFocusHash\(\);/);
   assert.match(page, /initializeSearchInputEnhancements\(\);\s*mySearchFocusReady = true;/);
+});
+
+test('TC-NS-14 生产后台兼容无context旧消息、非法context不创建标签', async () => {
+  const creates = [];
+  const background = backgroundHarness({ runtime: { getURL: file => `chrome-extension://fixture/${file}` },
+    tabs: { async create(properties) { creates.push(properties); return { id: 42 }; } } });
+  assert.equal((await background.send({ type: 'OPEN_MYSEARCH_PAGE' })).opened, true);
+  assert.equal(new URL(creates[0].url).hash, '#msp-focus-search');
+  const response = await background.send({ type: 'OPEN_MYSEARCH_PAGE', searchContext: { keyword: 123, selectionStart: 1 } });
+  assert.equal(response.success, false);
+  assert.equal(response.reason, 'INVALID_SEARCH_CONTEXT');
+  assert.equal(creates.length, 1);
+});
+
+test('TC-NS-14 导航API缺失与创建失败不伪造opened响应', async () => {
+  const unavailable = backgroundHarness({}, undefined);
+  // Explicit null prevents the harness default from substituting the real API.
+  const missing = backgroundHarness({}, null);
+  assert.equal((await missing.send({ type: 'OPEN_MYSEARCH_PAGE' })).reason, 'MYSEARCH_PAGE_UNAVAILABLE');
+  assert.equal((await unavailable.send({ type: 'OPEN_MYSEARCH_PAGE' })).success, false);
+  const failed = backgroundHarness({ runtime: { getURL: file => `chrome-extension://fixture/${file}` },
+    tabs: { async create() { throw new Error('create denied'); } } });
+  const response = await failed.send({ type: 'OPEN_MYSEARCH_PAGE', searchContext: { keyword: 'agi架构', selectionStart: 3 } });
+  assert.equal(response.success, false);
+  assert.equal(response.reason, 'MYSEARCH_PAGE_OPEN_FAILED');
+  assert.equal(response.opened, undefined);
+  assert.equal(failed.responses.length, 1);
+});
+
+test('TC-NS-14 中文emoji特殊字符与反向选区穿过生产后台后精确恢复', async () => {
+  const keyword = '  蓝牙😀 & 参数#?  ';
+  const context = { keyword, selectionStart: 2, selectionEnd: 6, selectionDirection: 'backward' };
+  let created;
+  const background = backgroundHarness({ runtime: { getURL: file => `chrome-extension://fixture/${file}` },
+    tabs: { async create(properties) { created = properties; return { id: 43 }; } } });
+  const response = await background.send({ type: 'OPEN_MYSEARCH_PAGE', searchContext: context });
+  assert.equal(response.success, true);
+  const hash = new URL(created.url).hash;
+  assert.deepEqual(navigation.parseFocusHash(hash), context);
+  const target = targetHarness(hash);
+  target.handler(); for (const callback of target.timers) callback();
+  assert.equal(target.input.value, keyword);
+  assert.equal(target.input.selectionStart, 2);
+  assert.equal(target.input.selectionEnd, 6);
+  assert.equal(target.input.selectionDirection, 'backward');
+});
+
+test('TC-NS-12 交接函数无窗口置顶或定位轮询副作用', () => {
+  assert.doesNotMatch(redirectFunction + focusFunction, /windows\.update|window\.focus\(|setInterval\(|requestAnimationFrame\(/);
+});
+
+test('TC-NS-11 检测旧后台丢参反例：显式context不能退回空focus片段', async () => {
+  const oldBackground = backgroundSource.replace('message.searchContext', 'undefined');
+  assert.notEqual(oldBackground, backgroundSource, 'counterexample must really remove forwarding');
+  let created;
+  const chromeApi = { runtime: { getURL: file => `chrome-extension://fixture/${file}` },
+    tabs: { async create(properties) { created = properties; return { id: 42 }; } } };
+  const { handleMessage } = loadFunctions(oldBackground, [
+    ['handleMessage', '// ============================================\n// 存储变更监听'],
+  ], { chrome: chromeApi, MySearchNavigation: navigation, console: { error() {} } });
+  await handleMessage({ type: 'OPEN_MYSEARCH_PAGE', searchContext: { keyword: 'agi架构', selectionStart: 3 } }, { tab: { id: 9 } }, () => {});
+  const restored = navigation.parseFocusHash(new URL(created.url).hash);
+  assert.equal(restored.keyword, '', 'old branch reproduces the empty target symptom');
+  assert.notEqual(restored.keyword, 'agi架构', 'the end-to-end assertion above must distinguish this from success');
+});
+
+test('TC-NS-11 无sender.tab时仍完整传词，不伪造openerTabId', async () => {
+  let created;
+  const context = { keyword: '六点半', selectionStart: 2, selectionEnd: 2, selectionDirection: 'none' };
+  const background = backgroundHarness({ runtime: { getURL: file => `chrome-extension://fixture/${file}` },
+    tabs: { async create(properties) { created = properties; return { id: 44 }; } } });
+  assert.equal((await background.send({ type: 'OPEN_MYSEARCH_PAGE', searchContext: context }, {})).opened, true);
+  assert.equal(Object.hasOwn(created, 'openerTabId'), false);
+  assert.equal(created.active, true);
+  assert.deepEqual(navigation.parseFocusHash(new URL(created.url).hash), context);
 });
