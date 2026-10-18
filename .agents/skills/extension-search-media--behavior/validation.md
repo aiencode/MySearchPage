@@ -31,7 +31,9 @@
 
 ## 即时阻断与旧标签接管（1.0.7）
 
+正式自然语言场景为 [即时阻断与旧标签回收 Test Case](../../test-cases/extension-instant-blocking.e2e.md)（TC-INSTANT-BLOCK-001～012）；逐项覆盖、缺口和复测命令见 [自动化映射](../../../tests/extension-instant-blocking.mapping.md)。下列是历史运行证据，本次文档阶段未重新执行。
+
 - `tests/extension-instant-blocking.browser.cjs` 使用真实 Chromium、manifest 及 MAIN/ISOLATED 世界脚本；四站地址由离线内容响应，其他 HTTP(S) 请求拒绝。验证正常 pushState/replaceState 可离开违规页面并同步解除门禁，普通按钮真实点击成功，再次请求违规目标仍被取消且不产生路由提交事件。没有反馈图片节点或等待恢复逻辑。
-- 设置页实际发送显式重连消息后，一个旧四站标签和一个旧 Google 标签均刷新并实际运行 `immediate-rule-blocking-v4`；已是 v4 的 Google 标签保留实例标记、不刷新。自动启动接管仍限四站，媒体隐藏能力没有扩大到 Google。
+- 设置页上下文实际发送显式重连消息后，一个旧标记四站标签和一个旧标记 Google 标签均刷新并实际运行 `immediate-rule-blocking-v4`；已是 v4 的 Google 标签保留实例标记、不刷新。旧标记由新版测试页面人为设置，只验证版本回收分支，不代表运行并清理了历史旧脚本。自动启动范围和非四站媒体脚本不注入未由该浏览器脚本独立断言，具体覆盖见映射。
 - 修复前真实浏览器复现了四站正常导航均被当前门禁锁住，以及旧 v3 标记被误判为当前版本（刷新次数 0）。修复后浏览器全部断言通过，相关回归 224/224 通过；此前 jsdom 中人为派发 popstate 的辅助已删除，改为真正加载 MAIN 世界钩子。
 - 这些是离线真实浏览器证据，不是四站线上适配或用户当前浏览器实例已升级的证据。现有 Chrome 的扩展加载路径已核对为本项目 `extension/`，但页面检查因宿主会话错误被拒绝，未确认其已重载 1.0.7。详细记录为 `plans/instant-blocking-ablation.md`，日志和截图位于会话 scratch 的 `browser-repro/`；临时测试配置已删除，不保留旧实现副本。

@@ -1,5 +1,7 @@
 # 即时阻断消融记录
 
+正式验收标准：[即时阻断与旧标签回收 Test Case](../.agents/test-cases/extension-instant-blocking.e2e.md)（TC-INSTANT-BLOCK-001～012）；现有覆盖与缺口：[自动化映射](../tests/extension-instant-blocking.mapping.md)。本文保留历史实验结果，不替代正式用例；本次文档补全没有重跑产品测试。
+
 ## 现行行为
 
 关键词、URL、作者、搜索词、页面标题和逐站主页权限继续使用现有规则。命中后同步取消访问/提交/播放尝试，保留违规卡片占位及页面级阻断状态；页面变更和设置关闭仍按既有条件解除阻断。违规媒体立即暂停，不等待。
