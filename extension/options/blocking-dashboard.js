@@ -3,7 +3,6 @@
 
   const rulesApi = globalThis.MySearchBlockingRules;
   const periods = document.getElementById('blocking-stats-periods');
-  const feedback = document.getElementById('blocking-feedback-stats');
   const status = document.getElementById('blocking-dashboard-status');
   const refreshButton = document.getElementById('blocking-stats-refresh');
   const importButton = document.getElementById('blocking-policy-import');
@@ -30,7 +29,6 @@
   const authorList = document.getElementById('blocking-author-list');
   if (
     !periods ||
-    !feedback ||
     !status ||
     !keywordInput ||
     !keywordAddButton ||
@@ -249,25 +247,6 @@
       periods.appendChild(row);
     }
 
-    feedback.textContent = '';
-    const labels = {
-      toast: '文字提示',
-      beep: '声音提示',
-      grayout: '灰度提示',
-    };
-    const values = stats?.last30Days?.feedbackByType || {};
-    for (const type of ['toast', 'beep', 'grayout']) {
-      const value = values[type] || {};
-      const measured = Number(value.measured || 0);
-      const retried = Number(value.retriedWithin10Minutes || 0);
-      const row = document.createElement('tr');
-      appendCell(row, labels[type]);
-      appendCell(row, value.count || 0);
-      appendCell(row, measured);
-      appendCell(row, retried);
-      appendCell(row, percent(measured ? retried / measured : 0));
-      feedback.appendChild(row);
-    }
   }
 
   async function refreshStats() {

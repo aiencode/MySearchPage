@@ -3,18 +3,21 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const redirect = require('../extension/content/native-search-redirect-runtime.js');
 const { read, loadFunctions, Element } = require('./native-search-test-support.cjs');
+const vm = require('node:vm');
+const ruleContext = vm.createContext({ URL });
+vm.runInContext(read('extension/shared/blocking-rules.js'), ruleContext);
 const source = read('extension/content/blocking-controller.js');
 const INTERACTIVE_SELECTOR = 'a[href], button, input, textarea, [role="button"]';
 function harness(host = 'www.douyin.com') {
   const head = new Element('head'); const body = new Element('body');
   const document = { head, body, documentElement: new Element('html'), createElement: tag => new Element(tag), getElementById: () => null };
   const sandbox = {
-    global: { document, MySearchNativeRedirect: redirect },
+    global: { document, MySearchNativeRedirect: redirect, location: { href: `https://${host}/` } },
     isElement: value => value instanceof Element, domain: () => host,
     rules: { highRiskDomains: ['douyin.com'], blockedKeywords: ['搜索', 'BLOCKME'] },
-    rulesApi: { findKeyword: (text, values) => values.find(value => text.includes(value)) || null },
+    rulesApi: ruleContext.MySearchBlockingRules,
     depthAdapterEntry: () => null, searchMediaCardSelector: () => '.known-card', searchMediaRootSelector: () => '.results',
-    isBlockingFeedbackNode: () => false, isCompactTextComponent: element => element.tagName === 'SPAN',
+    isBlockingNoticeNode: () => false, isCompactTextComponent: element => element.tagName === 'SPAN',
     INTERACTIVE_SELECTOR, CANDIDATE_SELECTOR: `${INTERACTIVE_SELECTOR}, span`,
     pageMatch: null, detailRootForElement: () => null,
     isVisiblePageElement: () => true, genericBlockingComponentForElement: element => element,

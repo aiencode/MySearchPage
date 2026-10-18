@@ -27,9 +27,13 @@ async function harness(t, markup, keyword = 'picot', blockedKeywords = [], overr
   let source = read('extension/content/blocking-controller.js');
   // Test-only inspection of production component-selection functions.
   assert.equal(source.split('  init();').length, 2, 'test hook must target exactly one production init call');
-  source = source.replace('  init();', '  global.testBlocking = { resultCardForElement, hideBlockedCard };\n  init();');
+  source = source.replace('  init();', '  global.testBlocking = { resultCardForElement, hideBlockedCard, dispose() { observer?.disconnect(); queuedNodes.clear(); } };\n  init();');
   window.eval(source);
-  t.after(() => window.close());
+  t.after(async () => {
+    window.testBlocking.dispose();
+    await new Promise(resolve => setImmediate(resolve));
+    window.close();
+  });
   await new Promise(resolve => setTimeout(resolve, 30));
   return window;
 }

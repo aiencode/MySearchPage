@@ -4,7 +4,7 @@
     "newtab": "navigation/navigation.html"
   },
   "name": "MySearchPage UA Controller",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "按站点控制 User-Agent，支持桌面UA下手机UI布局",
   "permissions": [
     "storage",
@@ -118,10 +118,6 @@
     }
   ],
   "web_accessible_resources": [
-    {
-      "resources": ["content/feedback-assets/*.png"],
-      "matches": ["<all_urls>"]
-    },
     {
       "resources": ["content/styles/bilibili-mobile.css"],
       "matches": ["*://*.bilibili.com/*"]

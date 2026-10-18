@@ -21,11 +21,6 @@
   const BLOCKED_CARD_LEAF_PLACEHOLDER_ATTR =
     'data-mysearch-blocked-leaf-placeholder';
   const NOTICE_ID = 'mysearch-blocking-notice';
-  const FEEDBACK_PAUSE_ID = 'mysearch-blocking-feedback-pause';
-  const TRANSIENT_FEEDBACK_IMAGE_ID =
-    'mysearch-blocking-feedback-image';
-  const PERSISTENT_FEEDBACK_IMAGE_ID =
-    'mysearch-blocking-page-gate-image';
   const PAGE_GATE_ATTR = 'data-mysearch-page-gate';
   const STYLE_ID = 'mysearch-blocking-style';
   const NAVIGATION_EVENT = 'mysearch-blocking-navigation-attempt';
@@ -38,7 +33,7 @@
   const BLOCKING_RUNTIME_ATTR =
     'data-mysearch-blocking-runtime';
   const BLOCKING_RUNTIME_VERSION =
-    'explicit-rules-switch-v1';
+    'immediate-rule-blocking-v4';
   // 当前先恢复基础模式：只按明确的关键词/网址/作者规则阻断。
   // 第二套“搜索会话 + 浏览层级”规则待逻辑统一后再重新启用。
   const DEPTH_NAVIGATION_ENFORCEMENT_ENABLED = false;
@@ -243,21 +238,6 @@
     '[style*="background-image"]',
   ].join(',');
   const DEDUPLICATION_WINDOW_MS = 2000;
-  const NEGATIVE_FEEDBACK_ASSETS = Object.freeze([
-    'content/feedback-assets/moldy-fruit.png',
-    'content/feedback-assets/clogged-drain.png',
-    'content/feedback-assets/greasy-pan.png',
-    'content/feedback-assets/dirty-wastewater.png',
-  ]);
-  const FALLBACK_FEEDBACK_IMAGE =
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 220">' +
-    '<rect width="320" height="220" fill="#4f5b52"/>' +
-    '<ellipse cx="160" cy="112" rx="112" ry="64" fill="#26302b"/>' +
-    '<g fill="#b7c58b"><circle cx="92" cy="92" r="21"/><circle cx="135" cy="136" r="16"/><circle cx="194" cy="88" r="18"/><circle cx="225" cy="132" r="13"/></g>' +
-    '<g fill="#71814b"><circle cx="92" cy="92" r="8"/><circle cx="135" cy="136" r="6"/><circle cx="194" cy="88" r="7"/></g>' +
-    '<text x="160" y="201" text-anchor="middle" font-family="Arial,sans-serif" font-size="22" font-weight="700" fill="#fff">已阻断，停止点击</text>' +
-    '</svg>';
-
   let rules = rulesApi.normalizeRules();
   let blockingEnabled = false;
   let rulesLoaded = false;
@@ -273,16 +253,10 @@
   const blockedCards = new Set();
   const blockedCardStates = new WeakMap();
   let recentAttempts = new Map();
-  let blockedClickCount = 0;
-  let lastFeedbackEventId = null;
-  let lastAttemptAt = null;
   let navigationContext = null;
   let lastRejectedContentId = '';
   let syntheticDetailIds = new WeakMap();
   let syntheticDetailSequence = 0;
-  let feedbackPauseUntil = 0;
-  let feedbackPauseTimer = null;
-  let feedbackPauseInterval = null;
   let persistentPageGateMatch = null;
   let activePageViewKey = '';
   let douyinHistoryContext = '';
@@ -372,37 +346,10 @@
         }),
       };
     }
-    const storedRules = await rulesApi.getRulesFromStorage();
-    const blockedKeyword = rulesApi.findKeyword(
-      keyword,
-      storedRules.blockedKeywords
-    );
-    if (blockedKeyword) {
-      return {
-        success: true,
-        opened: false,
-        blocked: true,
-        match: {
-          kind: 'keyword',
-          value: blockedKeyword,
-        },
-      };
-    }
-
-    const blockedUrlPattern = rulesApi.findUrlPattern(
-      targetUrl,
-      storedRules.blockedUrlPatterns
-    );
-    if (blockedUrlPattern) {
-      return {
-        success: true,
-        opened: false,
-        blocked: true,
-        match: {
-          kind: 'url',
-          value: blockedUrlPattern,
-        },
-      };
+    const storedRules = await rulesApi.getSearchRulesFromStorage();
+    const match = rulesApi.findSearchMatch(keyword, targetUrl, storedRules);
+    if (match) {
+      return { success: true, opened: false, blocked: true, match };
     }
 
     const session = await sendMessage({
@@ -793,15 +740,9 @@
     )?.length || 0;
   }
 
-  function isBlockingFeedbackNode(element) {
+  function isBlockingNoticeNode(element) {
     if (!isElement(element)) return false;
-    if (element.id && String(element.id).startsWith('mysearch-blocking-')) {
-      return true;
-    }
-    return Boolean(element.closest?.(
-      '#mysearch-blocking-notice, #mysearch-blocking-feedback-pause, ' +
-      '#mysearch-blocking-feedback-image, #mysearch-blocking-page-gate-image'
-    ));
+    return Boolean(element.closest?.(`#${NOTICE_ID}`));
   }
 
   function directTextForElement(element) {
@@ -813,10 +754,12 @@
       .trim();
   }
 
-  // The replacement search entry is a safe exit and must not match local rules.
+  // 插件搜索入口是退出当前站点的安全通道，不作为局部内容规则的目标。
   function isSearchRedirectControl(element) {
     if (!isElement(element)) return false;
     if (element.closest?.('[data-msp-native-search-root], [data-msp-native-search-button]')) return true;
+    const searchSite = rulesApi.searchSiteForUrl(global.location.href);
+    if (searchSite && element.matches?.(searchSite.inputs)) return true;
     const site = global.MySearchNativeRedirect?.getTargetSite?.(domain(), rules.highRiskDomains);
     const selector = site?.inputSelectors?.join(',');
     return Boolean(selector && element.matches?.(selector)) || Boolean(
@@ -827,12 +770,15 @@
   function containsSearchRedirectControl(element) {
     if (!isElement(element)) return false;
     if (element.querySelector?.('[data-msp-native-search-root], [data-msp-native-search-button]')) return true;
+    const searchSite = rulesApi.searchSiteForUrl(global.location.href);
+    if (searchSite && element.querySelector?.(searchSite.inputs)) return true;
     const site = global.MySearchNativeRedirect?.getTargetSite?.(domain(), rules.highRiskDomains);
     return Boolean(site?.inputSelectors?.length && element.querySelector?.(site.inputSelectors.join(',')));
   }
 
   function isSharedControlContainer(element, adapterEntry = depthAdapterEntry()) {
     if (!isElement(element)) return false;
+    // 已知结果卡片与结果流仍按卡片规则处理；导航外壳不能靠媒体/链接形状猜卡片。
     const cards = adapterEntry && searchMediaCardSelector(adapterEntry);
     const roots = adapterEntry && searchMediaRootSelector(adapterEntry);
     if (cards && element.matches?.(cards)) return false;
@@ -861,7 +807,7 @@
   }
 
   function isCompactTextComponent(element) {
-    if (!isElement(element) || isBlockingFeedbackNode(element)) return false;
+    if (!isElement(element) || isBlockingNoticeNode(element)) return false;
     const tagName = String(element.tagName || '').toUpperCase();
     if (!['DIV', 'SPAN', 'LABEL', 'P', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6']
       .includes(tagName)) {
@@ -879,13 +825,13 @@
   }
 
   function isGenericBlockingCandidate(element) {
-    if (!isElement(element) || isSearchRedirectControl(element) || isBlockingFeedbackNode(element) || isBlockingPageContainer(element)) return false;
+    if (!isElement(element) || isSearchRedirectControl(element) || isBlockingNoticeNode(element) || isBlockingPageContainer(element)) return false;
     if (element.matches?.(CANDIDATE_SELECTOR)) return true;
     return isCompactTextComponent(element);
   }
 
   function genericResultCardForElement(element, adapterEntry) {
-    if (!isElement(element) || isBlockingFeedbackNode(element)) return null;
+    if (!isElement(element) || isBlockingNoticeNode(element)) return null;
     // 小红书导航图标和空页面壳也具备媒体/链接形状，不能向上猜卡片。
     if (adapterEntry?.name === 'xiaohongshu') return null;
 
@@ -1025,7 +971,7 @@
     if (
       !isElement(element) ||
       isSearchRedirectControl(element) ||
-      isBlockingFeedbackNode(element) ||
+      isBlockingNoticeNode(element) ||
       detailRootForElement(element, adapterEntry)
     ) {
       return null;
@@ -1059,6 +1005,7 @@
     }
     return cards.filter((card) => resultCardForElement(card, adapterEntry));
   }
+
 
   function makeBlockedCardPlaceholder(match) {
     if (!canCreateDocumentNodes()) return null;
@@ -1105,7 +1052,10 @@
       String(card.tagName || '').toUpperCase()
     );
     if (isLeafControl && card.parentNode) {
-      placeholder.setAttribute(BLOCKED_CARD_LEAF_PLACEHOLDER_ATTR, '');
+      placeholder.setAttribute(
+        BLOCKED_CARD_LEAF_PLACEHOLDER_ATTR,
+        ''
+      );
       const parent = card.parentNode;
       const nextSibling = card.nextSibling;
       parent.replaceChild(placeholder, card);
@@ -1390,84 +1340,9 @@
     };
   }
 
-  function youtubeSearchTextFromUrl(
-    rawUrl,
-    baseUrl = global.location.href
-  ) {
-    if (!rawUrl) return '';
-    let url;
-    try {
-      url = new URL(rawUrl, baseUrl);
-    } catch (error) {
-      return '';
-    }
-    const hostname = url.hostname.toLowerCase();
-    if (
-      hostname !== 'youtube.com' &&
-      !hostname.endsWith('.youtube.com')
-    ) {
-      return '';
-    }
-    if (url.pathname !== '/results') return '';
-    return String(url.searchParams.get('search_query') || '').trim();
-  }
-
-  function searchTextFromUrl(rawUrl, baseUrl = global.location.href) {
-    if (!rawUrl) return '';
-    let url;
-    try {
-      url = new URL(rawUrl, baseUrl);
-    } catch (error) {
-      return '';
-    }
-    const hostname = url.hostname.toLowerCase();
-    const isDomain = (name) => (
-      hostname === name || hostname.endsWith(`.${name}`)
-    );
-    if (isDomain('youtube.com')) {
-      return youtubeSearchTextFromUrl(url.href, baseUrl);
-    }
-    if (isDomain('douyin.com')) {
-      const match = url.pathname.match(
-        /^\/(?:jingxuan\/)?search\/([^/?#]+)/
-      );
-      if (!match) return '';
-      try {
-        return decodeURIComponent(match[1]).trim();
-      } catch (error) {
-        return match[1].trim();
-      }
-    }
-    if (isDomain('xiaohongshu.com')) {
-      if (!/\/search(?:_result)?(?:\/|$)/.test(url.pathname)) return '';
-      return String(
-        url.searchParams.get('keyword') ||
-        url.searchParams.get('q') ||
-        ''
-      ).trim();
-    }
-    if (isDomain('bilibili.com')) {
-      if (!/\/search(?:\/|$)/.test(url.pathname) &&
-          !/\/v_search(?:\/|$)/.test(url.pathname)) return '';
-      return String(
-        url.searchParams.get('keyword') ||
-        url.searchParams.get('q') ||
-        ''
-      ).trim();
-    }
-    return '';
-  }
-
-  function findYouTubeSearchKeywordMatch(rawUrl) {
-    const searchText = searchTextFromUrl(
-      rawUrl,
-      global.location.href
-    );
-    if (!searchText) return null;
-    const keyword = rulesApi.findKeyword(
-      searchText,
-      rules.blockedKeywords
-    );
+  function findSearchKeywordMatch(rawUrl) {
+    const searchText = rulesApi.searchTextFromUrl(rawUrl, global.location.href);
+    const keyword = rulesApi.findKeyword(searchText, rules.blockedKeywords);
     if (!keyword) return null;
     return {
       kind: 'keyword',
@@ -1477,49 +1352,21 @@
     };
   }
 
-  function findYouTubeSearchControlMatch(target) {
-    if (
-      depthAdapterEntry()?.name !== 'youtube' ||
-      !isElement(target)
-    ) {
-      return null;
-    }
-
-    const selector = [
-      'input[name="search_query"]',
-      'input#search',
-      'input[type="search"]',
-    ].join(',');
-    const container = target.closest?.(
-      'form, ytd-searchbox, ytm-searchbox, yt-searchbox'
-    );
-    const input = target.matches?.(selector)
+  function findSearchControlMatch(target) {
+    if (!isElement(target)) return null;
+    const site = rulesApi.searchSiteForUrl(global.location.href);
+    if (!site) return null;
+    const container = target.closest?.(site.containers);
+    const input = target.matches?.(site.inputs)
       ? target
-      : target.querySelector?.(selector) ||
-        container?.querySelector?.(selector);
-    const searchText = String(input?.value || '').trim();
-    if (!searchText) return null;
-
-    const keyword = rulesApi.findKeyword(
-      searchText,
-      rules.blockedKeywords
-    );
-    if (!keyword) return null;
-    return {
-      kind: 'keyword',
-      value: keyword,
-    };
+      : container?.querySelector?.(site.inputs);
+    const keyword = rulesApi.findKeyword(String(input?.value || '').trim(), rules.blockedKeywords);
+    return keyword ? { kind: 'keyword', value: keyword } : null;
   }
 
-  function findYouTubeSearchEventMatch(event) {
-    const path = typeof event?.composedPath === 'function'
-      ? event.composedPath()
-      : [event?.target];
-    for (const target of path) {
-      const match = findYouTubeSearchControlMatch(target);
-      if (match) return match;
-    }
-    return null;
+  function findSearchEventMatch(event) {
+    const target = event?.composedPath?.()[0] || event?.target;
+    return findSearchControlMatch(target);
   }
 
   function contentIdFromElement(target) {
@@ -1590,27 +1437,7 @@
   }
 
   function isSearchResultsUrl(rawUrl) {
-    const adapter = depthAdapterEntry();
-    if (!adapter) return false;
-    if (!isAdapterDomainUrl(rawUrl, adapter)) return false;
-    let url;
-    try {
-      url = new URL(rawUrl, global.location.href);
-    } catch (error) {
-      return false;
-    }
-    if (adapter.name === 'xiaohongshu') {
-      return /\/search_result(?:\/|$)/.test(url.pathname);
-    }
-    if (adapter.name === 'douyin') {
-      // 抖音当前搜索页实际使用 /jingxuan/search/:keyword 路由，
-      // 旧版 /search/:keyword 仍保留兼容。
-      return /^\/(?:jingxuan\/)?search(?:\/|$)/.test(url.pathname);
-    }
-    if (adapter.name === 'bilibili') {
-      return /\/(?:s\/video|v_search)(?:\/|$)/.test(url.pathname);
-    }
-    return adapter.name === 'youtube' && url.pathname === '/results';
+    return rulesApi.isSearchUrl(rawUrl, global.location.href);
   }
 
   function isSearchResultsView(rawUrl) {
@@ -2039,8 +1866,7 @@
   }
 
   function matchElement(element) {
-    if (!isElement(element) || isBlockingFeedbackNode(element) ||
-        isBlockingPageContainer(element)) return null;
+    if (!isElement(element) || isBlockingNoticeNode(element) || isBlockingPageContainer(element)) return null;
     const keyword = rulesApi.findKeyword(textForElement(element), rules.blockedKeywords);
     if (keyword) return { kind: 'keyword', value: keyword, element };
     const target = element.matches(
@@ -2156,8 +1982,9 @@
   }
 
   function updatePageState() {
-    if (blockingEnabled !== true) return;
-    const nextUrlPattern = findUrlMatch(global.location.href);
+    if (blockingEnabled !== true && !rules.homepageRules) return;
+    const nextUrlPattern = blockingEnabled ? findUrlMatch(global.location.href, false) : null;
+    const nextHomepagePattern = rulesApi.findBlockedHomepage(global.location.href, rules.highRiskDomains, rules.homepageRules);
     const adapter = depthAdapterEntry();
     const onSearchResultsPage = isSearchResultsView(
       global.location.href
@@ -2169,7 +1996,7 @@
       activePageViewKey !== nextPageViewKey
     );
     if (pageViewChanged) {
-      clearFeedbackArtifactsForPageChange();
+      clearPageNoticeForPageChange();
       pageExposureRecorded = new Set();
       exposureMap = new WeakMap();
       recentAttempts.clear();
@@ -2186,16 +2013,17 @@
       onSearchResultsPage ||
       historyView.passive
     ) && !hasVisibleDetail;
-    const nextTitleKeyword = onPassiveCollectionPage
+    const nextTitleKeyword = !blockingEnabled || onPassiveCollectionPage
       ? null
       : rulesApi.findKeyword(
         global.document.title || '',
         rules.blockedKeywords
       );
-    const nextSearchMatch = onPassiveCollectionPage
-      ? findYouTubeSearchKeywordMatch(global.location.href)
+    const nextSearchMatch = blockingEnabled && onPassiveCollectionPage
+      ? findSearchKeywordMatch(global.location.href)
       : null;
     currentUrlPattern = nextUrlPattern;
+    currentHomepagePattern = nextHomepagePattern;
     currentTitleKeyword = nextTitleKeyword;
     currentSearchMatch = nextSearchMatch;
     const detectedPageMatch = detectedPageBlockingMatch();
@@ -2220,12 +2048,10 @@
     recordExposureForPage(currentUrlPattern && { kind: 'url', value: currentUrlPattern });
     recordExposureForPage(currentTitleKeyword && { kind: 'keyword', value: currentTitleKeyword });
     recordExposureForPage(currentSearchMatch);
+    if (currentHomepagePattern) recordExposureForPage({ kind: 'url', value: currentHomepagePattern, pageSource: 'homepage' });
     renderPageNotice();
     if (rulesLoaded && detectedPageMatch) {
       latchPersistentPageGate(detectedPageMatch, nextPageViewKey);
-    }
-    if (persistentPageGateMatch) {
-      showPersistentPageGateImage();
     }
     synchronizeDepthFromPage();
   }
@@ -2286,6 +2112,8 @@
         padding: 0 !important;
         transform: none !important;
         overflow: hidden !important;
+        align-self: flex-start !important;
+        justify-self: start !important;
         box-sizing: border-box !important;
         filter: none !important;
         opacity: 1 !important;
@@ -2298,6 +2126,7 @@
         user-select: none !important;
       }
       .${BLOCKED_CARD_PLACEHOLDER_CLASS} {
+        display: flex !important;
         width: 100% !important;
         inline-size: 100% !important;
         max-width: 100% !important;
@@ -2313,6 +2142,7 @@
         justify-content: center !important;
         box-sizing: border-box !important;
         padding: 6px 8px !important;
+        overflow: hidden !important;
         color: #666 !important;
         background: #f2f2f2 !important;
         font: 14px/1.2 Arial, sans-serif !important;
@@ -2347,96 +2177,9 @@
         font: 14px/1.2 Arial, sans-serif !important;
         pointer-events: none !important;
       }
-      #${NOTICE_ID}.feedback {
-        top: 18px !important;
-        right: 18px !important;
-        max-width: min(460px, calc(100vw - 36px)) !important;
-        padding: 12px 16px !important;
-        border: 3px solid #8b0000 !important;
-        border-radius: 6px !important;
-        background: #fff1f1 !important;
-        color: #8b0000 !important;
-        font: bold 16px/1.35 Arial, sans-serif !important;
-        box-shadow: 0 4px 18px rgba(0, 0, 0, 0.38) !important;
-      }
-      #${FEEDBACK_PAUSE_ID} {
-        position: fixed !important;
-        inset: 0 !important;
-        z-index: 2147483646 !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        box-sizing: border-box !important;
-        padding: 24px !important;
-        background: rgba(18, 18, 18, 0.94) !important;
-        color: #fff !important;
-        font: bold clamp(20px, 4vw, 38px)/1.35 Arial, sans-serif !important;
-        text-align: center !important;
-        white-space: pre-line !important;
-        cursor: not-allowed !important;
-        user-select: none !important;
-        pointer-events: none !important;
-      }
-      #${FEEDBACK_PAUSE_ID}[hidden] {
-        display: none !important;
-      }
-      html.mysearch-blocking-grayout {
-        filter: grayscale(0.85) !important;
-      }
-      html[${PAGE_GATE_ATTR}] body > *:not(#${NOTICE_ID}):not(#${PERSISTENT_FEEDBACK_IMAGE_ID}):not(#${FEEDBACK_PAUSE_ID}) {
+      html[${PAGE_GATE_ATTR}] body > *:not(#${NOTICE_ID}) {
         visibility: hidden !important;
         pointer-events: none !important;
-      }
-      html.mysearch-blocking-feedback-flash::before {
-        content: "已阻断" !important;
-        position: fixed !important;
-        inset: 0 !important;
-        z-index: 2147483645 !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        box-sizing: border-box !important;
-        border: 12px solid rgba(150, 0, 0, 0.82) !important;
-        background:
-          repeating-linear-gradient(
-            -45deg,
-            rgba(150, 0, 0, 0.13) 0,
-            rgba(150, 0, 0, 0.13) 18px,
-            rgba(255, 255, 255, 0.08) 18px,
-            rgba(255, 255, 255, 0.08) 36px
-          ) !important;
-        color: rgba(120, 0, 0, 0.9) !important;
-        font: bold min(11vw, 72px)/1 Arial, sans-serif !important;
-        pointer-events: none !important;
-      }
-      #mysearch-blocking-feedback-image,
-      #mysearch-blocking-page-gate-image {
-        position: fixed !important;
-        display: block !important;
-        top: 50% !important;
-        left: 50% !important;
-        z-index: 2147483647 !important;
-        width: min(72vw, 520px) !important;
-        height: auto !important;
-        margin: 0 !important;
-        padding: 0 !important;
-        border: 0 !important;
-        border-radius: 12px !important;
-        background: transparent !important;
-        box-shadow: 0 8px 28px rgba(0, 0, 0, 0.42) !important;
-        opacity: 0 !important;
-        visibility: hidden !important;
-        transform: translate(-50%, -50%) scale(0.92) !important;
-        transition:
-          opacity 90ms ease-out,
-          transform 90ms ease-out !important;
-        pointer-events: none !important;
-      }
-      #mysearch-blocking-feedback-image.visible,
-      #mysearch-blocking-page-gate-image.visible {
-        opacity: 1 !important;
-        visibility: visible !important;
-        transform: translate(-50%, -50%) scale(1) !important;
       }
       [${DEPTH2_HIDDEN_ATTR}] {
         display: none !important;
@@ -2515,7 +2258,7 @@
   }
 
   function ensurePageStateCurrent() {
-    if (blockingEnabled !== true) return;
+    if (blockingEnabled !== true && !rules.homepageRules) return;
     if (pageViewKey() === activePageViewKey) return;
     updatePageState();
   }
@@ -2528,6 +2271,7 @@
     hasCurrentContent
   ) {
     if (!gateMatch) return false;
+    if (gateMatch.pageSource === 'homepage' && (detectedMatch?.pageSource !== 'homepage' || detectedMatch.value !== gateMatch.value)) return true;
     if (gateMatch.pageViewKey) {
       return gateMatch.pageViewKey !== currentViewKey;
     }
@@ -2622,8 +2366,8 @@
 
     const adapter = depthAdapterEntry();
     if (detailRootForElement(target, adapter)) return null;
-    if (isSearchRedirectControl(target)) return null;
 
+    if (isSearchRedirectControl(target)) return null;
     const blockedCard = isElement(target)
       ? target.closest?.(`[${BLOCKED_CARD_ATTR}]`)
       : null;
@@ -3023,25 +2767,24 @@
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
-    const timestamp = recordClick(match);
-    if (timestamp != null) showFeedback(match, timestamp);
+    recordClick(match);
   }
 
   function handleSearchSubmit(event) {
-    if (blockingEnabled !== true) return;
+    if (blockingEnabled !== true && !pageIsBlocked) return;
     if (blockPersistentPageEvent(event)) return;
-    const match = findYouTubeSearchEventMatch(event);
+    const match = findSearchEventMatch(event);
     blockEvent(event, match);
   }
 
   function handleInteraction(event) {
-    if (blockingEnabled !== true) return;
+    if (blockingEnabled !== true && !pageIsBlocked) return;
     if (isAllowedDetailDismissal(event)) return;
     if (blockPersistentPageEvent(event)) return;
     if (event.type === 'keydown' && !['Enter', ' ', 'Spacebar'].includes(event.key)) return;
     if (event.type === 'keydown' && event.isComposing) return;
     if (event.type === 'keydown' && event.key === 'Enter') {
-      const searchMatch = findYouTubeSearchEventMatch(event);
+      const searchMatch = findSearchEventMatch(event);
       if (searchMatch) {
         blockEvent(event, searchMatch);
         return;
@@ -3064,14 +2807,15 @@
   }
 
   function handlePageNavigation(event) {
-    if (blockingEnabled !== true) return;
+    if (blockingEnabled !== true && !rules.homepageRules) return;
     const targetUrl = event.detail?.url || '';
-    const searchMatch = findYouTubeSearchKeywordMatch(targetUrl);
+    const searchMatch = blockingEnabled ? findSearchKeywordMatch(targetUrl) : null;
     if (searchMatch) {
       blockEvent(event, searchMatch);
       return;
     }
-    const targetUrlPattern = findUrlMatch(targetUrl);
+    const targetUrlPattern = blockingEnabled ? findUrlMatch(targetUrl)
+      : rulesApi.findBlockedHomepage(absoluteUrl(targetUrl), rules.highRiskDomains, rules.homepageRules);
     if (targetUrlPattern) {
       blockEvent(event, {
         kind: 'url',
@@ -3089,11 +2833,22 @@
       clearPersistentPageGate();
       return;
     }
-    if (blockPersistentPageEvent(event)) return;
-    const pageMatch = currentPageBlockingMatch();
-    if (pageMatch) {
-      blockEvent(event, pageMatch);
-      return;
+    // 门禁只约束当前违规内容，不能阻止用户离开它。
+    let hasSafeDestination = false;
+    try {
+      const destination = new URL(targetUrl, global.location.href);
+      hasSafeDestination = Boolean(targetUrl) &&
+        ['http:', 'https:', 'chrome-extension:'].includes(destination.protocol);
+    } catch (error) {
+      // 没有有效目标的事件仍按当前页面规则处理。
+    }
+    if (!hasSafeDestination) {
+      if (blockPersistentPageEvent(event)) return;
+      const pageMatch = currentPageBlockingMatch();
+      if (pageMatch) {
+        blockEvent(event, pageMatch);
+        return;
+      }
     }
     // 基础模式不根据“从第几个结果/详情返回到哪里”做额外阻断。
     if (DEPTH_NAVIGATION_ENFORCEMENT_ENABLED !== true) return;
@@ -3352,6 +3107,11 @@
     );
   }
 
+  function refreshBlockingView() {
+    updatePageState();
+    synchronizeDepthFromPage();
+  }
+
   function init() {
     markBlockingRuntimeVersion();
     installStyle();
@@ -3373,18 +3133,11 @@
       );
       global.addEventListener(MEDIA_EVENT, handleMediaAttempt, true);
       global.addEventListener('play', handleNativeMediaPlay, true);
-      global.addEventListener('popstate', () => {
-        updatePageState();
-        synchronizeDepthFromPage();
-      }, true);
-      global.addEventListener('hashchange', () => {
-        updatePageState();
-        synchronizeDepthFromPage();
-      }, true);
-      global.addEventListener('pageshow', () => {
-        updatePageState();
-        synchronizeDepthFromPage();
-      }, true);
+      for (const eventType of [
+        'popstate', 'hashchange', 'pageshow', 'mysearch-blocking-route-committed',
+      ]) {
+        global.addEventListener(eventType, refreshBlockingView, true);
+      }
       global.addEventListener('message', handleBlockingRuleRequest, false);
       global.addEventListener('message', handleSearchOpenRequest, false);
     }
@@ -3405,7 +3158,7 @@
     if (changes[rulesApi.STORAGE_KEYS.KEYWORDS] ||
       changes[rulesApi.STORAGE_KEYS.URL_PATTERNS] ||
       changes[rulesApi.STORAGE_KEYS.AUTHORS] ||
-      changes[rulesApi.STORAGE_KEYS.HIGH_RISK_DOMAINS]) {
+      changes[rulesApi.STORAGE_KEYS.HIGH_RISK_DOMAINS] || changes.uaRules) {
       refreshBlockingRules();
     }
   });

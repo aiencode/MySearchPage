@@ -3266,38 +3266,10 @@
                     tabId: tab?.id,
                 };
             }
-            const rules = await MySearchBlockingRules.getRulesFromStorage();
-            const blockedKeyword = MySearchBlockingRules.findKeyword(
-                keyword,
-                rules.blockedKeywords
-            );
-            if (blockedKeyword) {
-                return {
-                    success: true,
-                    opened: false,
-                    blocked: true,
-                    match: {
-                        kind: 'keyword',
-                        value: blockedKeyword,
-                    },
-                };
-            }
-
-            const blockedUrlPattern =
-                MySearchBlockingRules.findUrlPattern(
-                    url,
-                    rules.blockedUrlPatterns
-                );
-            if (blockedUrlPattern) {
-                return {
-                    success: true,
-                    opened: false,
-                    blocked: true,
-                    match: {
-                        kind: 'url',
-                        value: blockedUrlPattern,
-                    },
-                };
+            const rules = await MySearchBlockingRules.getSearchRulesFromStorage();
+            const match = MySearchBlockingRules.findSearchMatch(keyword, url, rules);
+            if (match) {
+                return { success: true, opened: false, blocked: true, match };
             }
 
             const session = await new Promise((resolve) => {

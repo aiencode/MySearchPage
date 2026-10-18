@@ -28,3 +28,10 @@
 - 逐项代码映射与串行运行命令：`tests/native-search-redirect-douyin-portal.mapping.md`。新增 6 项 DOM 边界单测，与现有搜索替换单测合计 24 项；浏览器回归加强为 4 种结构、16 轮真实结果点击/× 关闭，检查同一挂载点连接、目标一致、祖先可见性、视频解码及播放时间推进、关闭后播放停止/滚动锁清除/入口唯一。
 - 可复用的 `native-search-redirect-douyin-portal-negative.cjs` 仅在临时副本撤销明确 owner 保护，确认 5 个边界断言及浏览器的挂载点断言拒绝旧逻辑，并删除临时副本；产品源码不变。
 - 本轮防回归用例为离线验证；另重跑媒体隐藏开启相关 3 项 jsdom 场景。不测实际扬声器输出，不把此前真实页面证据提升为本轮新的线上执行结果。日志名以 `douyin-repeat-cases-` 开头，保留于会话 scratch。
+
+## 即时阻断与旧标签接管（1.0.7）
+
+- `tests/extension-instant-blocking.browser.cjs` 使用真实 Chromium、manifest 及 MAIN/ISOLATED 世界脚本；四站地址由离线内容响应，其他 HTTP(S) 请求拒绝。验证正常 pushState/replaceState 可离开违规页面并同步解除门禁，普通按钮真实点击成功，再次请求违规目标仍被取消且不产生路由提交事件。没有反馈图片节点或等待恢复逻辑。
+- 设置页实际发送显式重连消息后，一个旧四站标签和一个旧 Google 标签均刷新并实际运行 `immediate-rule-blocking-v4`；已是 v4 的 Google 标签保留实例标记、不刷新。自动启动接管仍限四站，媒体隐藏能力没有扩大到 Google。
+- 修复前真实浏览器复现了四站正常导航均被当前门禁锁住，以及旧 v3 标记被误判为当前版本（刷新次数 0）。修复后浏览器全部断言通过，相关回归 224/224 通过；此前 jsdom 中人为派发 popstate 的辅助已删除，改为真正加载 MAIN 世界钩子。
+- 这些是离线真实浏览器证据，不是四站线上适配或用户当前浏览器实例已升级的证据。现有 Chrome 的扩展加载路径已核对为本项目 `extension/`，但页面检查因宿主会话错误被拒绝，未确认其已重载 1.0.7。详细记录为 `plans/instant-blocking-ablation.md`，日志和截图位于会话 scratch 的 `browser-repro/`；临时测试配置已删除，不保留旧实现副本。

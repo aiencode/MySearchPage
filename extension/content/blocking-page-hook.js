@@ -55,7 +55,9 @@
       if (typeof original !== 'function') continue;
       global.history[methodName] = function guardedHistory(state, title, url) {
         if (dispatchNavigation(url, methodName)) return undefined;
-        return original.call(this, state, title, url);
+        const result = original.call(this, state, title, url);
+        global.dispatchEvent(new CustomEvent('mysearch-blocking-route-committed'));
+        return result;
       };
     } catch (error) {
       // 页面可能阻止覆盖 history 方法；popstate 和点击拦截仍然有效。

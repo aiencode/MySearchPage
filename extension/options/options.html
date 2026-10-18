@@ -74,7 +74,7 @@
 
     <section class="section blocking-dashboard" aria-labelledby="blocking-dashboard-title">
       <div class="section-header">
-        <h2 class="section-title" id="blocking-dashboard-title">阻断策略与效果</h2>
+        <h2 class="section-title" id="blocking-dashboard-title">阻断规则与统计</h2>
         <div class="section-actions">
           <button id="blocking-stats-refresh" class="btn btn-sm btn-secondary" type="button">刷新统计</button>
           <button id="blocking-policy-import" class="btn btn-sm btn-secondary" type="button">追加导入策略</button>
@@ -148,7 +148,6 @@
           <ul id="blocking-author-list" class="blocking-keyword-list" aria-labelledby="blocking-author-count"></ul>
         </div>
       </div>
-      <div class="blocking-stats-grid">
         <table class="blocking-stats-table">
           <thead>
             <tr>
@@ -161,19 +160,6 @@
           </thead>
           <tbody id="blocking-stats-periods"></tbody>
         </table>
-        <table class="blocking-stats-table">
-          <thead>
-            <tr>
-              <th>负反馈</th>
-              <th>次数</th>
-              <th>已测量</th>
-              <th>10分钟内重试</th>
-              <th>重试率</th>
-            </tr>
-          </thead>
-          <tbody id="blocking-feedback-stats"></tbody>
-        </table>
-      </div>
       <p id="blocking-dashboard-status" class="search-media-status" role="status" aria-live="polite"></p>
     </section>
 

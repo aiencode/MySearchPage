@@ -1,6 +1,5 @@
 /**
  * MySearchPage UA Controller - Background Service Worker
- * 
  * 职责：
  * 1. 使用 declarativeNetRequest (Chrome MV3) 动态管理 UA 修改规则
  * 2. 使用 webRequest.onBeforeSendHeaders (Firefox) 修改请求头
@@ -15,6 +14,7 @@
 // 在 Service Worker 中导入配置管理（内联方式，因为 MV3 不支持 importScripts 动态导入）
 // 注意：config.js 的函数需要在 Service Worker 中重新定义
 importScripts(chrome.runtime.getURL('shared/mysearch-navigation.js'));
+importScripts(chrome.runtime.getURL('shared/blocking-rules.js'));
 
 const STORAGE_KEYS_BG = {
   UA_RULES: 'uaRules',
@@ -34,10 +34,10 @@ const DEPTH_NAVIGATION_ENFORCEMENT_ENABLED_BG = false;
 const BLOCKING_RUNTIME_ATTR_BG =
   'data-mysearch-blocking-runtime';
 const BLOCKING_RUNTIME_VERSION_BG =
-  'explicit-rules-switch-v1';
+  'immediate-rule-blocking-v4';
 
 const BLOCKING_STATS_DB_BG = 'MySearchPageBlockingDB';
-const BLOCKING_STATS_DB_VERSION_BG = 1;
+const BLOCKING_STATS_DB_VERSION_BG = 2;
 const BLOCKING_STATS_STORE_BG = 'events';
 const SEARCH_SESSION_STORAGE_KEY_BG = 'mySearchNavigationSessions';
 const SEARCH_SESSION_BUDGET_MS_BG = 40 * 60 * 1000;
@@ -95,47 +95,7 @@ function supportsDepthNavigationBG(url, highRiskDomains) {
 }
 
 function findBlockingSearchMatchBG(keyword, targetUrl, rules) {
-  const normalizedKeyword = String(keyword || '').trim();
-  const normalizedUrl = String(targetUrl || '');
-  const searchTexts = [normalizedKeyword];
-
-  try {
-    const parsedTargetUrl = new URL(normalizedUrl);
-    const hostname = parsedTargetUrl.hostname.toLowerCase();
-    if (
-      (
-        hostname === 'youtube.com' ||
-        hostname.endsWith('.youtube.com')
-      ) &&
-      parsedTargetUrl.pathname === '/results'
-    ) {
-      const queryText = String(
-        parsedTargetUrl.searchParams.get('search_query') || ''
-      ).trim();
-      if (queryText && !searchTexts.includes(queryText)) {
-        searchTexts.push(queryText);
-      }
-    }
-  } catch (error) {
-    // targetUrl 的完整参数校验由 openSearchResultBG 负责。
-  }
-
-  for (const blockedKeyword of rules.blockedKeywords || []) {
-    const value = String(blockedKeyword || '');
-    if (
-      value &&
-      searchTexts.some(searchText => searchText.includes(value))
-    ) {
-      return { kind: 'keyword', value };
-    }
-  }
-  for (const blockedUrlPattern of rules.blockedUrlPatterns || []) {
-    const value = String(blockedUrlPattern || '');
-    if (value && normalizedUrl.includes(value)) {
-      return { kind: 'url', value };
-    }
-  }
-  return null;
+  return MySearchBlockingRules.findSearchMatch(keyword, targetUrl, rules);
 }
 
 async function readSearchSessionStateBG() {
@@ -289,14 +249,16 @@ async function openSearchResultBG(sender, keyword, targetUrl) {
   }
 
   const blockingEnabled = await getBlockingEnabledBG();
-  const rules = blockingEnabled ? await getBlockingRulesBG() : null;
+  const homepageRules = await getUARulesBG();
+  const rules = blockingEnabled ? { ...await getBlockingRulesBG(), homepageRules } : null;
+  const homepage = blockingEnabled ? null : MySearchBlockingRules.findBlockedHomepage(parsedUrl.href, [], homepageRules);
   const match = blockingEnabled
     ? findBlockingSearchMatchBG(
       normalizedKeyword,
       parsedUrl.href,
       rules
     )
-    : null;
+    : homepage ? { kind: 'url', value: homepage } : null;
   if (match) {
     return {
       opened: false,
@@ -444,7 +406,7 @@ if (chrome.tabs?.onRemoved) {
   });
 }
 
-async function reconnectSearchMediaTabsBG() {
+async function reconnectSearchMediaTabsBG(includeAllSites = false) {
   if (
     typeof chrome.tabs?.query !== 'function' ||
     typeof chrome.scripting?.executeScript !== 'function'
@@ -452,9 +414,11 @@ async function reconnectSearchMediaTabsBG() {
     return { attempted: 0, connected: 0, reloaded: 0 };
   }
 
-  const tabs = await chrome.tabs.query({
-    url: SEARCH_MEDIA_TAB_PATTERNS_BG,
-  });
+  const mediaTabs = await chrome.tabs.query({ url: SEARCH_MEDIA_TAB_PATTERNS_BG });
+  const mediaTabIds = new Set(mediaTabs.map(tab => tab.id));
+  const tabs = includeAllSites
+    ? (await chrome.tabs.query({})).filter(tab => /^https?:\/\//i.test(tab.url || ''))
+    : mediaTabs;
   let connected = 0;
   let reloaded = 0;
   for (const tab of tabs) {
@@ -475,6 +439,7 @@ async function reconnectSearchMediaTabsBG() {
         reloaded += 1;
         continue;
       }
+      if (!mediaTabIds.has(tab.id)) continue;
       await chrome.scripting.executeScript({
         target: { tabId: tab.id, frameIds: [0] },
         files: SEARCH_MEDIA_SCRIPT_FILES_BG,
@@ -1036,7 +1001,6 @@ function normalizeBlockingEventBG(event) {
   const type = [
     'exposure',
     'click',
-    'feedback',
     'attemptedDepth3Navigation',
   ].includes(source.type) ? source.type : null;
   if (!type) throw new Error('阻断统计事件类型无效');
@@ -1049,15 +1013,8 @@ function normalizeBlockingEventBG(event) {
     domain: String(source.domain || '').slice(0, 253),
     timestamp: Number.isFinite(source.timestamp) ? source.timestamp : Date.now(),
     sessionId: String(source.sessionId || '').slice(0, 200),
-    feedbackType: String(source.feedbackType || '').slice(0, 40),
     fromContentId: String(source.fromContentId || '').slice(0, 500),
     toContentId: String(source.toContentId || '').slice(0, 500),
-    nextBlockedAttemptInterval: Number.isFinite(source.nextBlockedAttemptInterval)
-      ? source.nextBlockedAttemptInterval
-      : null,
-    whetherRetriedWithin10Minutes: typeof source.whetherRetriedWithin10Minutes === 'boolean'
-      ? source.whetherRetriedWithin10Minutes
-      : null,
   };
 }
 
@@ -1071,28 +1028,6 @@ async function recordBlockingEventBG(event) {
     request.onerror = () => reject(request.error || new Error('保存阻断统计失败'));
   });
   return record;
-}
-
-async function updateFeedbackOutcomeBG(eventId, interval, retried) {
-  if (!eventId) return false;
-  const db = await openBlockingStatsDBBG();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(BLOCKING_STATS_STORE_BG, 'readwrite');
-    const store = transaction.objectStore(BLOCKING_STATS_STORE_BG);
-    const request = store.get(String(eventId));
-    request.onsuccess = () => {
-      const record = request.result;
-      if (!record || record.type !== 'feedback') {
-        resolve(false);
-        return;
-      }
-      record.nextBlockedAttemptInterval = Number.isFinite(interval) ? interval : null;
-      record.whetherRetriedWithin10Minutes = typeof retried === 'boolean' ? retried : null;
-      store.put(record);
-      resolve(true);
-    };
-    request.onerror = () => reject(request.error || new Error('更新反馈统计失败'));
-  });
 }
 
 async function getBlockingEventsSinceBG(timestamp) {
@@ -1113,14 +1048,9 @@ function startOfDayBG(timestamp) {
 }
 
 function aggregateBlockingStatsBG(events, start, end) {
-  const selected = events.filter((event) => event.timestamp >= start && event.timestamp < end);
+  const selected = events.filter(event => ['exposure', 'click', 'attemptedDepth3Navigation'].includes(event.type) && event.timestamp >= start && event.timestamp < end);
   const exposures = selected.filter((event) => event.type === 'exposure');
   const clicks = selected.filter((event) => event.type === 'click');
-  const feedbacks = selected.filter((event) => event.type === 'feedback');
-  const attempts = selected.filter(event =>
-    event.type === 'click' ||
-    event.type === 'attemptedDepth3Navigation'
-  );
   const attemptedDepth3Navigations = selected.filter(
     event => event.type === 'attemptedDepth3Navigation'
   );
@@ -1137,31 +1067,6 @@ function aggregateBlockingStatsBG(events, start, end) {
       attemptedClickRate: count.exposure ? count.click / count.exposure : 0,
     }]));
   };
-  const feedbackByType = {};
-  for (const event of feedbacks) {
-    const type = event.feedbackType || 'unknown';
-    const item = feedbackByType[type] || { count: 0, retriedWithin10Minutes: 0, measured: 0 };
-    item.count += 1;
-    const laterAttempt = attempts.find(attempt =>
-      attempt.sessionId &&
-      attempt.sessionId === event.sessionId &&
-      attempt.timestamp > event.timestamp &&
-      attempt.timestamp - event.timestamp <= 10 * 60 * 1000
-    );
-    const measuredOutcome =
-      typeof event.whetherRetriedWithin10Minutes === 'boolean'
-        ? event.whetherRetriedWithin10Minutes
-        : laterAttempt
-          ? true
-          : end - event.timestamp >= 10 * 60 * 1000
-            ? false
-            : null;
-    if (typeof measuredOutcome === 'boolean') {
-      item.measured += 1;
-      if (measuredOutcome) item.retriedWithin10Minutes += 1;
-    }
-    feedbackByType[type] = item;
-  }
   return {
     blockedExposureCount: exposures.length,
     attemptedBlockedClickCount: clicks.length,
@@ -1169,7 +1074,6 @@ function aggregateBlockingStatsBG(events, start, end) {
     attemptedClickRate: exposures.length ? clicks.length / exposures.length : 0,
     byKeyword: group('keyword'),
     byDomain: group('domain'),
-    feedbackByType,
   };
 }
 
@@ -1240,7 +1144,7 @@ async function handleMessage(message, sender, sendResponse) {
       }
 
       case 'GET_BLOCKING_RULES': {
-        sendResponse({ success: true, rules: await getBlockingRulesBG() });
+        sendResponse({ success: true, rules: { ...await getBlockingRulesBG(), homepageRules: await getUARulesBG() } });
         break;
       }
 
@@ -1267,7 +1171,7 @@ async function handleMessage(message, sender, sendResponse) {
       case 'RECONNECT_SEARCH_MEDIA_TABS': {
         sendResponse({
           success: true,
-          ...(await reconnectSearchMediaTabsBG()),
+          ...(await reconnectSearchMediaTabsBG(true)),
         });
         break;
       }
@@ -1328,16 +1232,6 @@ async function handleMessage(message, sender, sendResponse) {
       case 'RECORD_BLOCKING_EVENT': {
         const event = await recordBlockingEventBG(message.event);
         sendResponse({ success: true, eventId: event.id });
-        break;
-      }
-
-      case 'UPDATE_FEEDBACK_OUTCOME': {
-        const updated = await updateFeedbackOutcomeBG(
-          message.eventId,
-          message.nextBlockedAttemptInterval,
-          message.whetherRetriedWithin10Minutes
-        );
-        sendResponse({ success: true, updated });
         break;
       }
 

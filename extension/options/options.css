@@ -174,8 +174,7 @@ body {
   display: none;
 }
 
-.blocking-dashboard,
-.blocking-stats-grid {
+.blocking-dashboard {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -714,8 +713,7 @@ input:focus-visible + .toggle-slider,
     height: 20px;
   }
 
-  .blocking-dashboard,
-  .blocking-stats-grid {
+  .blocking-dashboard {
     gap: 2px;
   }
 
@@ -913,8 +911,7 @@ input:focus-visible + .toggle-slider,
     height: 18px;
   }
 
-  .blocking-dashboard,
-  .blocking-stats-grid {
+  .blocking-dashboard {
     gap: 1px;
   }
 

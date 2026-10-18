@@ -1,6 +1,6 @@
 ---
 name: extension--high-risk-content-control--change
-description: 继续 MySearchPage 高风险内容访问控制、资料检索边界、搜索会话、行为反馈、收藏历史或跨平台适配的分阶段需求时使用。
+description: 继续 MySearchPage 高风险内容访问控制、资料检索边界、搜索会话、阻断行为统计、收藏历史或跨平台适配的分阶段需求时使用。
 ---
 
 本 change 承载“把高风险内容平台改造成主动、限时、不可横向游走的资料检索工具”的完整产品设计；它不是一次性实现全部功能的授权。

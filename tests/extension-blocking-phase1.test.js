@@ -37,7 +37,7 @@ function loadNamedFunction(relativePath, functionName, globals = {}) {
 }
 
 function loadRules() {
-  const context = vm.createContext({});
+  const context = vm.createContext({ URL });
   context.globalThis = context;
   vm.runInContext(
     read('extension/shared/blocking-rules.js'),
@@ -71,10 +71,9 @@ test('manifest loads blocking modules and preserves media controller', () => {
   assert.ok(manifest.content_scripts.some(entry =>
     entry.js?.includes('content/search-media-controller.js')
   ));
-  assert.ok(manifest.web_accessible_resources.some(entry =>
-    entry.resources?.includes('content/feedback-assets/*.png') &&
-    entry.matches?.includes('<all_urls>')
-  ));
+  assert.ok(!(manifest.web_accessible_resources || []).some(entry =>
+    entry.resources?.some(resource => resource.includes('feedback-assets'))
+  ), 'removed feedback images must not be exposed to pages');
 });
 
 test('four rule collections remain independent and normalized', () => {
@@ -246,7 +245,6 @@ test('background exposes editable rules and statistics routes', () => {
     'GET_BLOCKING_RULES',
     'ADD_BLOCKING_RULE',
     'RECORD_BLOCKING_EVENT',
-    'UPDATE_FEEDBACK_OUTCOME',
     'GET_BLOCKING_STATS',
     'IMPORT_BLOCKING_POLICY',
     'EXPORT_BLOCKING_POLICY',
@@ -259,6 +257,175 @@ test('background exposes editable rules and statistics routes', () => {
     source,
     /if \(!\['keyword', 'url', 'author', 'both'\]\.includes\(scope\)\)/
   );
+});
+
+test('removed blocking effects and outcome statistics leave no production references', () => {
+  const controller = read('extension/content/blocking-controller.js');
+  assert.doesNotMatch(controller,
+    /showFeedback|show\w*ImageFeedback|showPersistentPageGateImage|renderBlockingFeedbackImage|selectBlockingFeedbackImage|flashBlockingFeedback|playBeep|showBehaviorPauseFeedback|finishFeedbackPause|clearFeedbackArtifactsForPageChange|showTemporaryNotice|blockDuringFeedbackPause|persistentGateEventNeedsFeedback/);
+  assert.doesNotMatch(controller,
+    /NEGATIVE_FEEDBACK_ASSETS|FALLBACK_FEEDBACK_IMAGE|FEEDBACK_PAUSE_ID|TRANSIENT_FEEDBACK_IMAGE_ID|PERSISTENT_FEEDBACK_IMAGE_ID|feedbackPause|blockedClickCount|lastFeedbackEventId|lastAttemptAt|lastFeedbackAt|feedbackType|feedbackImageAsset|pauseDurationMs|soundProfile|trainingPrompt|AudioContext|oscillator/);
+  assert.doesNotMatch(controller,
+    /feedback-assets|mysearch-blocking-feedback-|mysearch-blocking-page-gate-image|UPDATE_FEEDBACK_OUTCOME|type:\s*['"]feedback['"]/);
+  assert.match(controller, /function clearPageNoticeForPageChange/);
+  const background = read('extension/background/ua-controller.js');
+  assert.doesNotMatch(background,
+    /UPDATE_FEEDBACK_OUTCOME|updateFeedbackOutcomeBG|feedbackStats|feedbackByType|feedbackType|nextBlockedAttemptInterval|whetherRetriedWithin10Minutes/);
+  const dashboard = read('extension/options/blocking-dashboard.js');
+  assert.doesNotMatch(dashboard, /feedbackStats|feedbackByType|blocking-feedback-stats/);
+});
+
+test('blockEvent cancels synchronously before recording, without waiting for storage', () => {
+  const calls = [];
+  const match = { kind: 'keyword', value: '赌博' };
+  const blockEvent = loadNamedFunction(
+    'extension/content/blocking-controller.js', 'blockEvent', {
+      recordClick(recorded) {
+        assert.equal(recorded, match);
+        calls.push('record');
+        return new Promise(() => {});
+      },
+    }
+  );
+  const event = {
+    preventDefault() { calls.push('prevent'); },
+    stopPropagation() { calls.push('stop'); },
+    stopImmediatePropagation() { calls.push('immediate'); },
+  };
+  assert.equal(blockEvent(event, match), undefined);
+  assert.deepEqual(calls, ['prevent', 'stop', 'immediate', 'record']);
+  calls.length = 0;
+  blockEvent(event, null);
+  assert.deepEqual(calls, []);
+});
+
+test('page media is paused immediately and autoplay is disabled despite individual failures', () => {
+  const calls = [];
+  const media = [
+    { autoplay: true, pause() { calls.push('video'); }, removeAttribute(name) { calls.push(name); } },
+    { autoplay: true, pause() { throw new Error('locked'); }, removeAttribute(name) { calls.push(name); } },
+    { autoplay: true, pause() { calls.push('audio'); }, removeAttribute(name) { calls.push(name); } },
+  ];
+  const pausePageMedia = loadNamedFunction(
+    'extension/content/blocking-controller.js', 'pausePageMedia', {
+      global: { document: { querySelectorAll(selector) {
+        assert.equal(selector, 'video, audio');
+        return media;
+      } } },
+    }
+  );
+  assert.equal(pausePageMedia(), undefined);
+  assert.deepEqual(calls, ['video', 'autoplay', 'autoplay', 'audio', 'autoplay']);
+  assert.ok(media.every(item => item.autoplay === false));
+});
+
+test('click and exposure recording keeps payloads and deduplication without effect state', () => {
+  const messages = [];
+  const globals = {
+    now: () => 10000,
+    eventId: type => `${type}-fixture`,
+    domain: () => 'example.test',
+    sessionId: 'fixture-session',
+    sendMessage(message) { messages.push(message); return Promise.resolve(); },
+    recentAttempts: new Map(),
+    DEDUPLICATION_WINDOW_MS: 2000,
+    pageExposureRecorded: new Set(),
+  };
+  globals.allowDeduplicatedAttempt = loadNamedFunction(
+    'extension/content/blocking-controller.js', 'allowDeduplicatedAttempt', globals
+  );
+  const recordClick = loadNamedFunction(
+    'extension/content/blocking-controller.js', 'recordClick', globals
+  );
+  const markExposure = loadNamedFunction(
+    'extension/content/blocking-controller.js', 'markExposure', globals
+  );
+  const keywordMatch = { kind: 'keyword', value: '赌博' };
+  const urlMatch = { kind: 'url', value: 'blocked.example' };
+  markExposure(null, keywordMatch);
+  markExposure(null, keywordMatch);
+  markExposure(null, urlMatch);
+  assert.equal(recordClick(keywordMatch), 10000);
+  assert.equal(recordClick(keywordMatch), null);
+  assert.equal(recordClick(urlMatch), 10000);
+  assert.deepEqual(messages.map(message => message.event.type),
+    ['exposure', 'exposure', 'click', 'click']);
+  for (const message of messages) {
+    assert.equal(message.type, 'RECORD_BLOCKING_EVENT');
+    assert.equal(message.event.domain, 'example.test');
+    assert.equal(message.event.timestamp, 10000);
+    assert.equal(message.event.sessionId, 'fixture-session');
+    assert.equal(message.event.keyword || message.event.urlPattern,
+      message.event.keyword ? '赌博' : 'blocked.example');
+    assert.ok(!Object.keys(message.event).some(key => /feedback|pause|sound/i.test(key)));
+  }
+});
+
+test('background stores normalized blocking events and rejects retired presentation events', async () => {
+  const normalize = loadNamedFunction(
+    'extension/background/ua-controller.js', 'normalizeBlockingEventBG'
+  );
+  for (const type of ['feedback', 'unknown', '', null]) {
+    assert.throws(() => normalize({ type }), /阻断统计事件类型无效/);
+  }
+  const records = [];
+  const recordBlockingEvent = loadNamedFunction(
+    'extension/background/ua-controller.js', 'recordBlockingEventBG', {
+      normalizeBlockingEventBG: normalize,
+      BLOCKING_STATS_STORE_BG: 'events',
+      openBlockingStatsDBBG: async () => ({ transaction(storeName, mode) {
+        assert.equal(storeName, 'events');
+        assert.equal(mode, 'readwrite');
+        return { objectStore(name) {
+          assert.equal(name, 'events');
+          return { put(record) {
+            records.push(record);
+            const request = {};
+            queueMicrotask(() => request.onsuccess());
+            return request;
+          } };
+        } };
+      } }),
+    }
+  );
+  for (const type of ['exposure', 'click', 'attemptedDepth3Navigation']) {
+    const record = await recordBlockingEvent({
+      id: `${type}-fixture`, type, keyword: '赌博', urlPattern: '',
+      domain: 'example.test', timestamp: 10000, sessionId: 'fixture-session',
+      feedbackType: 'removed', nextBlockedAttemptInterval: 123,
+      whetherRetriedWithin10Minutes: true,
+    });
+    assert.equal(record.type, type);
+    assert.equal(record.keyword, '赌博');
+    assert.equal(record.timestamp, 10000);
+    assert.equal(record.sessionId, 'fixture-session');
+    assert.ok(!Object.keys(record).some(key => /feedback|nextBlockedAttemptInterval|whetherRetriedWithin10Minutes/.test(key)));
+  }
+  assert.equal(records.length, 3);
+});
+
+test('blocking aggregates retain exposure and click counts, rates and period boundaries only', () => {
+  const aggregate = loadNamedFunction(
+    'extension/background/ua-controller.js', 'aggregateBlockingStatsBG'
+  );
+  const events = [
+    { type: 'exposure', timestamp: 100, keyword: '赌博', domain: 'example.test' },
+    { type: 'exposure', timestamp: 150, keyword: '赌博', domain: 'example.test' },
+    { type: 'click', timestamp: 200, keyword: '赌博', domain: 'example.test' },
+    { type: 'click', timestamp: 300, keyword: '赌博', domain: 'example.test' },
+    { type: 'exposure', timestamp: 99, keyword: 'excluded', domain: 'outside.test' },
+  ];
+  const stats = JSON.parse(JSON.stringify(aggregate(events, 100, 300)));
+  assert.equal(stats.blockedExposureCount, 2);
+  assert.equal(stats.attemptedBlockedClickCount, 1);
+  assert.equal(stats.attemptedClickRate, 0.5);
+  assert.deepEqual(stats.byKeyword, { '赌博': { exposure: 2, click: 1, attemptedClickRate: 0.5 } });
+  assert.deepEqual(stats.byDomain, { 'example.test': { exposure: 2, click: 1, attemptedClickRate: 0.5 } });
+  assert.ok(!Object.keys(stats).some(key => /feedback/i.test(key)));
+  const empty = aggregate([], 100, 300);
+  assert.equal(empty.blockedExposureCount, 0);
+  assert.equal(empty.attemptedBlockedClickCount, 0);
+  assert.equal(empty.attemptedClickRate, 0);
 });
 
 test('settings lists and edits all blocking rule collections', () => {
@@ -298,7 +465,7 @@ test('main-page searches are blocked before opening and create sessions when all
   const findMatch = loadNamedFunction(
     'extension/background/ua-controller.js',
     'findBlockingSearchMatchBG',
-    { URL }
+    { URL, MySearchBlockingRules: loadRules() }
   );
   const rules = {
     blockedKeywords: ['赌博', '光王'],
@@ -358,13 +525,9 @@ test('main-page searches are blocked before opening and create sessions when all
 
 test('search keyword matches become page-level blocks and persistent gates stay separate', () => {
   const controller = read('extension/content/blocking-controller.js');
-  const youtubeSearchTextFromUrl = loadNamedFunction(
-    'extension/content/blocking-controller.js',
-    'youtubeSearchTextFromUrl',
-    { URL, String }
-  );
+  const searchTextFromUrl = loadRules().searchTextFromUrl;
   assert.equal(
-    youtubeSearchTextFromUrl(
+    searchTextFromUrl(
       'https://www.youtube.com/results?' +
         'search_query=%E5%85%89%E7%8E%8B',
       'https://www.youtube.com/'
@@ -372,25 +535,20 @@ test('search keyword matches become page-level blocks and persistent gates stay 
     '光王'
   );
   assert.equal(
-    youtubeSearchTextFromUrl(
+    searchTextFromUrl(
       'https://www.youtube.com/watch?v=allowed',
       'https://www.youtube.com/'
     ),
     ''
   );
   assert.equal(
-    youtubeSearchTextFromUrl(
+    searchTextFromUrl(
       'https://example.test/results?search_query=光王',
       'https://www.youtube.com/'
     ),
     ''
   );
 
-  const searchTextFromUrl = loadNamedFunction(
-    'extension/content/blocking-controller.js',
-    'searchTextFromUrl',
-    { URL, String }
-  );
   assert.equal(
     searchTextFromUrl(
       'https://www.douyin.com/jingxuan/search/%E5%85%89%E7%8E%8B?type=general',
@@ -436,25 +594,16 @@ test('search keyword matches become page-level blocks and persistent gates stay 
 
   let pauseCount = 0;
   let clickRecords = 0;
-  let feedbackCount = 0;
-  let persistentImageShows = 0;
   const gateGlobals = {
     persistentPageGateMatch: null,
     activePageViewKey: 'test-view',
     pageIsBlocked: false,
-    showPersistentPageGateImage() {
-      persistentImageShows += 1;
-      return 'content/feedback-assets/fixed.png';
-    },
     pausePageMedia() {
       pauseCount += 1;
     },
     recordClick() {
       clickRecords += 1;
       return 100 + clickRecords;
-    },
-    showFeedback() {
-      feedbackCount += 1;
     },
   };
   const latchPersistentPageGate = loadNamedFunction(
@@ -467,9 +616,8 @@ test('search keyword matches become page-level blocks and persistent gates stay 
   assert.equal(latchPersistentPageGate(pageMatch), false);
   assert.equal(gateGlobals.pageIsBlocked, true);
   assert.equal(pauseCount, 1);
-  assert.equal(clickRecords, 1);
-  assert.equal(feedbackCount, 1);
-  assert.equal(persistentImageShows, 1);
+  assert.equal(clickRecords, 1, 'page gating records the initial blocked attempt once');
+  assert.equal(gateGlobals.persistentPageGateMatch.pageViewKey, 'test-view');
 
   const eventGlobals = {
     persistentPageGateMatch: pageMatch,
@@ -479,17 +627,13 @@ test('search keyword matches become page-level blocks and persistent gates stay 
       clickRecords += 1;
       return 200;
     },
-    showFeedback() {
-      feedbackCount += 1;
-    },
   };
-  const persistentGateEventNeedsFeedback = loadNamedFunction(
+  const shouldRecordPageAttempt = loadNamedFunction(
     'extension/content/blocking-controller.js',
-    'persistentGateEventNeedsFeedback',
+    'shouldRecordPageAttempt',
     eventGlobals
   );
-  eventGlobals.persistentGateEventNeedsFeedback =
-    persistentGateEventNeedsFeedback;
+  eventGlobals.shouldRecordPageAttempt = shouldRecordPageAttempt;
   for (const type of [
     'click',
     'pointerdown',
@@ -497,21 +641,21 @@ test('search keyword matches become page-level blocks and persistent gates stay 
     'submit',
     'mysearch-blocking-navigation-attempt',
   ]) {
-    assert.equal(persistentGateEventNeedsFeedback({ type }), true, type);
+    assert.equal(shouldRecordPageAttempt({ type }), true, type);
   }
   for (const key of ['Enter', ' ', 'Spacebar']) {
     assert.equal(
-      persistentGateEventNeedsFeedback({ type: 'keydown', key }),
+      shouldRecordPageAttempt({ type: 'keydown', key }),
       true,
       key
     );
   }
   assert.equal(
-    persistentGateEventNeedsFeedback({ type: 'keydown', key: 'a' }),
+    shouldRecordPageAttempt({ type: 'keydown', key: 'a' }),
     false
   );
   assert.equal(
-    persistentGateEventNeedsFeedback({
+    shouldRecordPageAttempt({
       type: 'keydown',
       key: 'Enter',
       isComposing: true,
@@ -524,7 +668,7 @@ test('search keyword matches become page-level blocks and persistent gates stay 
     'mousemove',
     'pointermove',
   ]) {
-    assert.equal(persistentGateEventNeedsFeedback({ type }), false, type);
+    assert.equal(shouldRecordPageAttempt({ type }), false, type);
   }
 
   const blockPersistentPageEvent = loadNamedFunction(
@@ -553,13 +697,16 @@ test('search keyword matches become page-level blocks and persistent gates stay 
   assert.equal(blockPersistentPageEvent(passiveMediaEvent), true);
   assert.equal(passiveMediaEvent.prevented, true);
   assert.equal(passiveMediaEvent.target.paused, true);
-  assert.equal(clickRecords, 1);
-  assert.equal(feedbackCount, 1);
+  assert.equal(passiveMediaEvent.stopped, true);
+  assert.equal(passiveMediaEvent.immediatelyStopped, true);
+  assert.equal(clickRecords, 1, 'passive media attempts must not add click records');
 
   const activeClickEvent = makeEvent('click');
   assert.equal(blockPersistentPageEvent(activeClickEvent), true);
+  assert.equal(activeClickEvent.prevented, true);
+  assert.equal(activeClickEvent.stopped, true);
+  assert.equal(activeClickEvent.immediatelyStopped, true);
   assert.equal(clickRecords, 2);
-  assert.equal(feedbackCount, 2);
 
   const activeNavigationEvent = makeEvent(
     'mysearch-blocking-navigation-attempt'
@@ -570,7 +717,6 @@ test('search keyword matches become page-level blocks and persistent gates stay 
   );
   assert.equal(activeNavigationEvent.prevented, true);
   assert.equal(clickRecords, 3);
-  assert.equal(feedbackCount, 3);
 
   const blockEventSource = loadNamedFunction(
     'extension/content/blocking-controller.js',
@@ -587,17 +733,15 @@ test('search keyword matches become page-level blocks and persistent gates stay 
     'recordDepth3Attempt',
     {}
   ).toString();
-  assert.ok(
-    depth3Source.indexOf('recordClick(match)') <
-      depth3Source.indexOf("type: 'RECORD_BLOCKING_EVENT'")
-  );
+  assert.match(depth3Source, /recordClick\(match\)/);
+  assert.match(depth3Source, /type: 'attemptedDepth3Navigation'/);
   assert.match(
     controller,
     /global\.addEventListener\('submit', handleSearchSubmit, true\)/
   );
   assert.match(
     controller,
-    /findYouTubeSearchKeywordMatch\(targetUrl\)/
+    /findSearchKeywordMatch\(targetUrl\)/
   );
   assert.doesNotMatch(
     controller,
@@ -614,91 +758,30 @@ test('search keyword matches become page-level blocks and persistent gates stay 
     controller,
     /activeBlockingStateKey|rulesSignature|function blockingStateKey|function beginBlockingState|function activateBlockingState/
   );
-  const finishPauseSource = loadNamedFunction(
-    'extension/content/blocking-controller.js',
-    'finishFeedbackPause',
-    {}
-  ).toString();
-  assert.doesNotMatch(
-    finishPauseSource,
-    /persistentPageGate|clearPersistentPageGate/
-  );
-
-  const transientImageSource = loadNamedFunction(
-    'extension/content/blocking-controller.js',
-    'showBlockingImageFeedback',
-    {}
-  ).toString();
-  assert.match(transientImageSource, /setTimeout/);
-  assert.match(transientImageSource, /5000/);
-  assert.match(
-    transientImageSource,
-    /TRANSIENT_FEEDBACK_IMAGE_ID/
-  );
-
-  const persistentImageSource = loadNamedFunction(
-    'extension/content/blocking-controller.js',
-    'showPersistentPageGateImage',
-    {}
-  ).toString();
-  assert.match(
-    persistentImageSource,
-    /PERSISTENT_FEEDBACK_IMAGE_ID/
-  );
-  assert.match(
-    persistentImageSource,
-    /renderBlockingFeedbackImage/
-  );
-  assert.doesNotMatch(
-    persistentImageSource,
-    /setTimeout|showBlockingImageFeedback/
-  );
-
-  const clearGateSource = loadNamedFunction(
+  const clearGateGlobals = {
+    persistentPageGateMatch: gateGlobals.persistentPageGateMatch,
+    clearPageNoticeForPageChange() { clearCalls += 1; },
+  };
+  let clearCalls = 0;
+  const clearPersistentPageGate = loadNamedFunction(
     'extension/content/blocking-controller.js',
     'clearPersistentPageGate',
-    {}
-  ).toString();
-  assert.match(
-    clearGateSource,
-    /clearFeedbackArtifactsForPageChange\(\)/
+    clearGateGlobals
   );
-  const clearFeedbackArtifactsSource = loadNamedFunction(
+  assert.equal(clearPersistentPageGate(), true);
+  assert.equal(clearGateGlobals.persistentPageGateMatch, null);
+  assert.equal(clearCalls, 1);
+  assert.equal(clearPersistentPageGate(), false);
+  assert.equal(clearCalls, 1);
+
+  const clearNoticeSource = loadNamedFunction(
     'extension/content/blocking-controller.js',
-    'clearFeedbackArtifactsForPageChange',
+    'clearPageNoticeForPageChange',
     {}
   ).toString();
-  assert.match(
-    clearFeedbackArtifactsSource,
-    /finishFeedbackPause\(\)/
-  );
-  for (const identifier of [
-    'NOTICE_ID',
-    'TRANSIENT_FEEDBACK_IMAGE_ID',
-    'PERSISTENT_FEEDBACK_IMAGE_ID',
-    'FEEDBACK_PAUSE_ID',
-    'PAGE_GATE_ATTR',
-  ]) {
-    assert.match(
-      clearFeedbackArtifactsSource,
-      new RegExp(identifier),
-      `${identifier} must be cleared when the SPA view changes`
-    );
-  }
-  for (const timerPattern of [
-    'showTemporaryNotice\\.timer',
-    'flashBlockingFeedback\\.timer',
-    'showBlockingImageFeedback\\.timer',
-  ]) {
-    assert.match(
-      clearFeedbackArtifactsSource,
-      new RegExp(timerPattern)
-    );
-  }
-  assert.match(
-    clearFeedbackArtifactsSource,
-    /mysearch-blocking-feedback-flash/
-  );
+  assert.match(clearNoticeSource, /NOTICE_ID/);
+  assert.match(clearNoticeSource, /PAGE_GATE_ATTR/);
+  assert.doesNotMatch(clearNoticeSource, /setTimeout|setInterval/);
 
   const shouldClearPersistentPageGate = loadNamedFunction(
     'extension/content/blocking-controller.js',
@@ -744,12 +827,6 @@ test('search keyword matches become page-level blocks and persistent gates stay 
       false
     ),
     true
-  );
-  assert.match(controller, /function showPersistentPageGateImage/);
-  assert.match(controller, /mysearch-blocking-page-gate-image/);
-  assert.match(
-    controller,
-    /showBehaviorPauseFeedback\(\);\s*const feedbackImageAsset = match\.persistentPageGate\s*\?\s*showPersistentPageGateImage\(\)\s*:\s*showBlockingImageFeedback\(\)/
   );
 });
 
@@ -838,15 +915,14 @@ test('SPA page gate does not leak from search into an unblocked Douyin detail', 
     '交互前必须同步刷新已经切换的 SPA 页面状态'
   );
 
-  let staleFeedback = 0;
+  let staleRecords = 0;
   const staleContext = {
     persistentPageGateMatch: staleGate,
     ensurePageStateCurrent() {
       staleContext.persistentPageGateMatch = null;
     },
-    persistentGateEventNeedsFeedback() { return true; },
-    recordClick() { return 1; },
-    showFeedback() { staleFeedback += 1; },
+    shouldRecordPageAttempt() { return true; },
+    recordClick() { staleRecords += 1; },
   };
   const blockStaleEvent = loadNamedFunction(
     'extension/content/blocking-controller.js',
@@ -867,18 +943,17 @@ test('SPA page gate does not leak from search into an unblocked Douyin detail', 
     { prevent: 0, stop: 0, immediate: 0, pause: 0 }
   );
   assert.equal(
-    staleFeedback,
+    staleRecords,
     0,
-    '未命中详情点击暂停不能显示反馈图片'
+    '未命中详情点击暂停不能记录阻断尝试'
   );
 
-  let currentFeedback = 0;
+  let currentRecords = 0;
   const currentContext = {
     persistentPageGateMatch: currentGate,
     ensurePageStateCurrent() {},
-    persistentGateEventNeedsFeedback() { return true; },
-    recordClick() { return 2; },
-    showFeedback() { currentFeedback += 1; },
+    shouldRecordPageAttempt() { return true; },
+    recordClick() { currentRecords += 1; },
   };
   const blockCurrentEvent = loadNamedFunction(
     'extension/content/blocking-controller.js',
@@ -899,9 +974,9 @@ test('SPA page gate does not leak from search into an unblocked Douyin detail', 
     { prevent: 1, stop: 1, immediate: 1, pause: 1 }
   );
   assert.equal(
-    currentFeedback,
+    currentRecords,
     1,
-    '真正命中的详情必须继续反馈并拦截'
+    '真正命中的详情必须继续记录并拦截'
   );
 
   const controller = read('extension/content/blocking-controller.js');
@@ -915,11 +990,11 @@ test('SPA page gate does not leak from search into an unblocked Douyin detail', 
   );
   assert.match(
     controller,
-    /persistentPageGate: true,\s*pageViewKey: currentViewKey,/
+    /pageViewKey: currentViewKey\b/
   );
   assert.match(
     controller,
-    /const nextSearchMatch = onPassiveCollectionPage\s*\?\s*findYouTubeSearchKeywordMatch\(\s*global\.location\.href\s*\)\s*:\s*null;/
+    /const nextSearchMatch = blockingEnabled && onPassiveCollectionPage\s*\?\s*findSearchKeywordMatch\(\s*global\.location\.href\s*\)\s*:\s*null;/
   );
 });
 
@@ -1062,7 +1137,6 @@ test('Douyin detail pause controls skip broad interaction matching while real pa
     kind: 'keyword',
     value: 'real-page-hit',
     pageSource: 'title',
-    persistentPageGate: true,
   };
   const matchedDetailInteraction =
     loadInteractionMatch(realPageMatch);
@@ -1099,7 +1173,7 @@ test('Douyin detail pause controls skip broad interaction matching while real pa
       blockEvent() {
         blockedPauseInteractions += 1;
         throw new Error(
-          '未命中详情暂停不得进入 blockEvent/showFeedback 路径'
+          '未命中详情暂停不得进入 blockEvent 路径'
         );
       },
     }
@@ -1182,7 +1256,7 @@ test('Douyin detail pause controls skip broad interaction matching while real pa
   assert.equal(
     unmatchedMediaBlocks,
     0,
-    '未命中详情的媒体事件不得触发反馈'
+    '未命中详情的媒体事件不得触发阻断'
   );
 
   let matchedMediaBlocks = 0;
@@ -1243,7 +1317,7 @@ test('Douyin detail pause controls skip broad interaction matching while real pa
   );
   assert.match(
     controller,
-    /if \(pageViewChanged\) \{\s*clearFeedbackArtifactsForPageChange\(\);\s*pageExposureRecorded = new Set\(\);\s*exposureMap = new WeakMap\(\);\s*recentAttempts\.clear\(\);/
+    /if \(pageViewChanged\) \{\s*clearPageNoticeForPageChange\(\);\s*pageExposureRecorded = new Set\(\);\s*exposureMap = new WeakMap\(\);\s*recentAttempts\.clear\(\);/
   );
 });
 
@@ -1307,7 +1381,8 @@ test('legacy OPEN_SEARCH_RESULT fallback blocks only stored matches', async () =
   const createdTabs = [];
   const sessionMessages = [];
   const rulesApi = {
-    async getRulesFromStorage() {
+    ...loadRules(),
+    async getSearchRulesFromStorage() {
       return storageRules;
     },
     findKeyword(text, keywords) {
@@ -1434,6 +1509,8 @@ test('first blocked search creates neither SearchSession nor tab', async () => {
       Number,
       URL,
       Error,
+      MySearchBlockingRules: loadRules(),
+      async getUARulesBG() { return {}; },
       async getBlockingEnabledBG() {
         return blockingEnabled;
       },
@@ -1522,7 +1599,7 @@ test('temporary blocking master switch is wired from popup to enforcement', () =
   assert.match(background, /const BLOCKING_ENABLED_STORAGE_KEY_BG = 'blockingEnabled'/);
   assert.match(background, /case 'GET_BLOCKING_STATUS'/);
   assert.match(background, /case 'TOGGLE_BLOCKING'/);
-  assert.match(background, /blockingEnabled \? await getBlockingRulesBG\(\) : null/);
+  assert.match(background, /const rules = blockingEnabled \? \{ \.\.\.await getBlockingRulesBG\(\), homepageRules \} : null/);
   assert.match(controller, /const BLOCKING_ENABLED_STORAGE_KEY = 'blockingEnabled'/);
   assert.match(controller, /type: 'GET_BLOCKING_STATUS'/);
   assert.match(controller, /blockingEnabled !== true/);
@@ -1671,14 +1748,10 @@ test('Douyin history scroll, autoplay and detail close stay passive', () => {
 
   assert.match(
     controller,
-    /const nextTitleKeyword = onPassiveCollectionPage\s*\?\s*null/
+    /const nextTitleKeyword = !blockingEnabled \|\| onPassiveCollectionPage\s*\?\s*null/
   );
   assert.match(controller, /isAllowedDetailDismissal\(event\)/);
   assert.doesNotMatch(controller, /blockDuringFeedbackPause/);
-  assert.match(
-    controller,
-    /#\$\{FEEDBACK_PAUSE_ID\} \{[\s\S]*?pointer-events: none !important;/
-  );
 });
 
 test('returning from a Douyin video to search results is never depth 3', () => {
@@ -1689,9 +1762,8 @@ test('returning from a Douyin video to search results is never depth 3', () => {
     {
       blockingEnabled: true,
       DEPTH_NAVIGATION_ENFORCEMENT_ENABLED: true,
-      blockDuringFeedbackPause() { return false; },
       blockPersistentPageEvent() { return false; },
-      findYouTubeSearchKeywordMatch() { return null; },
+      findSearchKeywordMatch() { return null; },
       findUrlMatch() { return null; },
       douyinHistoryViewState() {
         return { context: '', passive: false };
@@ -1729,9 +1801,8 @@ test('baseline mode does not block ordinary depth navigation', () => {
     {
       blockingEnabled: true,
       DEPTH_NAVIGATION_ENFORCEMENT_ENABLED: false,
-      blockDuringFeedbackPause() { return false; },
       blockPersistentPageEvent() { return false; },
-      findYouTubeSearchKeywordMatch() { return null; },
+      findSearchKeywordMatch() { return null; },
       findUrlMatch() { return null; },
       douyinHistoryViewState() {
         return { context: '', passive: false };
@@ -1812,7 +1883,7 @@ test('keyword-matched search cards replace original content with a low-stimulus 
   assert.match(controller, /function fallbackResultCardForElement\(element, adapterEntry\)/);
   assert.match(controller, /function genericResultCardForElement\(element, adapterEntry\)/);
   assert.match(controller, /具备“媒体 \+ 内容链接 \+ 少量文字”/);
-  assert.match(controller, /function searchTextFromUrl\(rawUrl/);
+  assert.match(controller, /rulesApi\.searchTextFromUrl\(rawUrl/);
   assert.match(controller, /PAGE_GATE_ATTR/);
   assert.match(controller, /\[data-e2e\*="search-result-item"\]/);
   assert.match(controller, /\[data-e2e="search-video-card"\]/);
@@ -2184,7 +2255,7 @@ test('policy dashboard and old-tab takeover remain in the existing extension', (
   assert.match(background, /SEARCH_MEDIA_SCRIPT_FILES_BG/);
   assert.match(
     background,
-    /BLOCKING_RUNTIME_VERSION_BG =\s*'explicit-rules-switch-v1'/
+    /BLOCKING_RUNTIME_VERSION_BG =\s*'immediate-rule-blocking-v4'/
   );
   assert.match(
     background,
@@ -2193,14 +2264,14 @@ test('policy dashboard and old-tab takeover remain in the existing extension', (
   assert.match(background, /chrome\.tabs\.reload\(tab\.id\)/);
   assert.match(
     blockingController,
-    /BLOCKING_RUNTIME_VERSION =\s*'explicit-rules-switch-v1'/
+    /BLOCKING_RUNTIME_VERSION =\s*'immediate-rule-blocking-v4'/
   );
   assert.match(
     blockingController,
     /setAttribute\?\.\(\s*BLOCKING_RUNTIME_ATTR,\s*BLOCKING_RUNTIME_VERSION/
   );
   assert.match(options, /id="blocking-stats-periods"/);
-  assert.match(options, /id="blocking-feedback-stats"/);
+  assert.doesNotMatch(options, /id="blocking-feedback-stats"/);
   assert.match(options, /id="search-media-diagnostics"/);
   assert.match(options, /src="blocking-dashboard\.js"/);
   assert.match(dashboard, /type: 'GET_BLOCKING_STATS'/);
@@ -2357,56 +2428,7 @@ test('controller covers dynamic attributes and navigation boundaries', () => {
     /activeBlockingStateKey|rulesSignature|function blockingStateKey|function beginBlockingState|function activateBlockingState/
   );
   assert.doesNotMatch(controller, /lastFeedbackAt/);
-  assert.match(
-    controller,
-    /const feedbackType = 'aversive\+pause\+beep\+photo'/
-  );
-  assert.match(controller, /function flashBlockingFeedback/);
-  assert.match(controller, /function showBlockingImageFeedback/);
-  assert.match(
-    controller,
-    /function visibleDocumentAppendTarget\(\) \{\s*const target = global\.document\?\.body \|\|\s*global\.document\?\.documentElement/
-  );
-  assert.equal(
-    (
-      controller.match(
-        /const target = visibleDocumentAppendTarget\(\);/g
-      ) || []
-    ).length,
-    4
-  );
-  assert.equal(
-    (
-      controller.match(
-        /const target = documentAppendTarget\(\);/g
-      ) || []
-    ).length,
-    1
-  );
-  assert.match(controller, /createElement\('img'\)/);
-  assert.match(controller, /global\.chrome\?\.runtime\?\.getURL\?\./);
-  assert.match(controller, /data:image\/svg\+xml;charset=utf-8/);
-  assert.match(controller, /const fallbackImageUrl =/);
-  assert.match(controller, /image\.onload = revealImage/);
-  assert.match(controller, /image\.onerror = \(\) =>/);
-  assert.match(
-    controller,
-    /target\.appendChild\(image\);\s*image\.classList\.add\('visible'\)/
-  );
-  assert.match(
-    controller,
-    /showBehaviorPauseFeedback\(\);\s*const feedbackImageAsset = match\.persistentPageGate\s*\?\s*showPersistentPageGateImage\(\)\s*:\s*showBlockingImageFeedback\(\)/
-  );
-  assert.match(controller, /display: block !important/);
-  assert.match(controller, /image\.classList\.add\('visible'\)/);
-  assert.match(
-    controller,
-    /classList\.add\('mysearch-blocking-feedback-flash'\)/
-  );
-  assert.match(controller, /playBeep\(\)/);
-  assert.match(controller, /内容已阻断。本次冲动点击已记录/);
-  assert.match(controller, /冲动不是命令。停一下，识别它，然后回到原来的任务/);
-  assert.match(controller, /type: 'feedback'/);
+  assert.match(controller, /function documentAppendTarget/);
   assert.match(controller, /function loadBlockingRules/);
   assert.match(
     controller,
@@ -2464,23 +2486,6 @@ test('high-risk navigation has persistent sessions and explicit adapters only', 
   assert.match(controller, /data-aweme-id/);
   assert.match(controller, /data-bvid/);
   assert.match(controller, /a\[href\*="\/watch\?"\]/);
-  assert.match(controller, /NEGATIVE_FEEDBACK_ASSETS/);
-  for (const asset of [
-    'moldy-fruit.png',
-    'clogged-drain.png',
-    'greasy-pan.png',
-    'dirty-wastewater.png',
-  ]) {
-    assert.match(controller, new RegExp(asset.replace('.', '\\.') + "'")
-    );
-  }
-  assert.match(controller, /oscillator\.frequency\.setValueAtTime\(2800/);
-  assert.match(controller, /context\.currentTime \+ 0\.14/);
-  assert.match(controller, /function showBehaviorPauseFeedback/);
-  assert.match(controller, /先停 \$\{seconds\} 秒/);
-  assert.match(controller, /pauseDurationMs: 5000/);
-  assert.match(controller, /soundProfile: 'short-high-frequency-safe'/);
-  assert.match(controller, /trainingPrompt: '识别冲动，不执行，回到原任务'/);
   assert.match(controller, /function depth3Match/);
   const isDepth3 = loadNamedFunction(
     'extension/content/blocking-controller.js',
