@@ -796,7 +796,7 @@ test('search keyword matches become page-level blocks and persistent gates stay 
       false,
       false
     ),
-    false
+    true
   );
   assert.equal(
     shouldClearPersistentPageGate(
@@ -806,7 +806,7 @@ test('search keyword matches become page-level blocks and persistent gates stay 
       true,
       true
     ),
-    false
+    true
   );
   assert.equal(
     shouldClearPersistentPageGate(
@@ -1748,7 +1748,7 @@ test('Douyin history scroll, autoplay and detail close stay passive', () => {
 
   assert.match(
     controller,
-    /const nextTitleKeyword = !blockingEnabled \|\| onPassiveCollectionPage\s*\?\s*null/
+    /const nextTitleKeyword = !blockingEnabled \|\| onPassiveCollectionPage \|\|\s*\(title === stalePageTitle && !detailTitleConfirmsKeyword\(titleKeyword, adapter\)\)\s*\?\s*null/
   );
   assert.match(controller, /isAllowedDetailDismissal\(event\)/);
   assert.doesNotMatch(controller, /blockDuringFeedbackPause/);
@@ -1900,24 +1900,24 @@ test('keyword-matched search cards replace original content with a low-stimulus 
   assert.match(controller, /restoreBlockedCards\(\);\s*\n\s*rules = rulesApi/);
 });
 
-test('blocked search placeholders use compact content sizing and protect replacement controls', () => {
+test('blocked placeholders use their own compact size, not the old control dimensions', () => {
   const controller = read('extension/content/blocking-controller.js');
-  assert.match(controller, /data-msp-native-search-root/);
-  assert.match(controller, /function isSearchRedirectControl\(element\)/);
-  assert.match(controller, /function containsSearchRedirectControl\(element\)/);
-  assert.match(controller, /function isSharedControlContainer\(element/);
+  assert.doesNotMatch(controller, /blockedCardInlineSize|BLOCKED_CARD_INLINE_SIZE_VAR/);
   assert.match(controller, /width: fit-content !important;/);
   assert.match(controller, /height: auto !important;/);
   assert.match(controller, /min-height: 0 !important;/);
+  assert.match(controller, /flex: 0 0 auto !important;/);
+  assert.match(controller, /position: relative !important;/);
   assert.match(controller, /z-index: 0 !important;/);
 });
 
 test('Douyin current jingxuan search route is treated as a result page', () => {
-  const controller = read('extension/content/blocking-controller.js');
-  const mediaAdapters = read('extension/content/search-media-adapters.js');
-  const route = '/^\\/(?:jingxuan\\/)?search(?:\\/|$)/';
-  assert.ok(controller.includes(route));
-  assert.ok(mediaAdapters.includes(route));
+  const api = loadRules();
+  for (const route of ['/jingxuan/search/资料', '/search/资料']) {
+    assert.equal(api.isSearchUrl(`https://www.douyin.com${route}`), true);
+    assert.equal(api.searchTextFromUrl(`https://www.douyin.com${route}`), '资料');
+  }
+  assert.equal(api.isSearchUrl('https://www.douyin.com/video/123'), false);
 });
 
 test('Xiaohongshu content IDs are found from SPA cards and detail links', () => {
@@ -2259,8 +2259,11 @@ test('policy dashboard and old-tab takeover remain in the existing extension', (
   );
   assert.match(
     background,
-    /runtimeVersion !== BLOCKING_RUNTIME_VERSION_BG/
+    /runtime\?\.marker !== BLOCKING_RUNTIME_VERSION_BG/
   );
+  assert.match(background, /runtime\?\.activeVersion !== BLOCKING_RUNTIME_VERSION_BG/);
+  assert.match(background, /!runtime\?\.rulesApiPresent/);
+  assert.match(blockingController, /global\.__mySearchBlockingRuntimeVersion = BLOCKING_RUNTIME_VERSION/);
   assert.match(background, /chrome\.tabs\.reload\(tab\.id\)/);
   assert.match(
     blockingController,
@@ -2467,7 +2470,6 @@ test('high-risk navigation has persistent sessions and explicit adapters only', 
   assert.match(background, /chrome\.tabs\.onCreated\.addListener/);
   assert.match(background, /tab\.openerTabId/);
   assert.match(background, /foregroundTabIds/);
-  assert.match(background, /attemptedDepth3Navigation/);
   for (const domain of [
     'xiaohongshu.com',
     'douyin.com',
@@ -2561,7 +2563,6 @@ test('high-risk navigation has persistent sessions and explicit adapters only', 
   assert.match(controller, /pendingContentUrl/);
   assert.match(background, /pendingContentUrl/);
   assert.match(controller, /function synchronizeDepthFromPage/);
-  assert.match(controller, /type: 'attemptedDepth3Navigation'/);
   assert.match(controller, /DEPTH2_HIDDEN_ATTR/);
   assert.match(controller, /NAVIGATION_DEPTH_ATTR/);
   for (const selectorEvidence of [

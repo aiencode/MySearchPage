@@ -705,6 +705,60 @@ for (const site of sites) {
         );
       }
     );
+    scenario('S-10', '复用封面容器连续打开关闭四个详情不隐藏播放器祖先', async t => {
+      const h = await harness(t, site);
+      const cards = [h.document.querySelector('[data-test-card]')];
+      cards.push(addCard(h, site, 'second'), addCard(h, site, 'third'));
+      const slot = cards[0].querySelector('[data-test-media-slot]');
+      const shell = h.document.createElement('div');
+      shell.className = 'cover-wrapper';
+      // A text-free result cover is hidden before the site reuses it as a
+      // portal host. Its fixed positioning must also survive text reflow.
+      shell.style.cssText = 'position:fixed;height:480px';
+      slot.appendChild(shell);
+      await h.settle();
+      assert.equal(visible(h, shell), false);
+
+      const detail = h.document.createElement('section');
+      detail.setAttribute('data-e2e', 'modal-video-container');
+      detail.innerHTML = '<div data-e2e="feed-active-video"><video></video><canvas></canvas></div><button>关闭</button>';
+      const video = detail.querySelector('video');
+      for (let round = 0; round < 4; round += 1) {
+        let clicks = 0;
+        const card = cards[round % cards.length];
+        const open = () => {
+          clicks += 1;
+          detail.hidden = false;
+          shell.appendChild(detail);
+        };
+        card.addEventListener('click', open, { once: true });
+        card.click();
+        assert.equal(clicks, 1, 'result click must reach the site handler');
+        await h.settle();
+        await video.play();
+        await h.settle();
+        assert.ok(visible(h, video), `round ${round + 1}: detail ancestor is hidden`);
+        assert.ok(visible(h, detail.querySelector('canvas')));
+        assert.equal(shell.style.position, 'fixed', 'detail portal host must not be reflowed');
+        assert.equal(shell.style.height, '480px', 'detail portal host height must be preserved');
+        assert.equal(video.paused, false);
+        assert.equal(video.muted, false);
+        for (const background of cards) {
+          assertMediaHidden(h, background);
+          assert.equal(background.querySelector('[data-test-preview]').paused, true);
+        }
+
+        video.pause();
+        // Exercise both cached hidden detail roots and removed roots.
+        if (round % 2) detail.remove();
+        else detail.hidden = true;
+        await h.settle();
+        assert.ok(visible(h, card.querySelector('[data-test-link="title"]')));
+        assertMediaHidden(h, card);
+        assert.equal(visible(h, shell), false, 'closed portal must not leave a click-intercepting cover');
+      }
+    });
+
   }
 
   scenario('S-10', '关闭详情和恢复搜索后复用及新结果继续处理', async t => {

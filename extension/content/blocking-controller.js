@@ -245,6 +245,7 @@
   let queuedNodes = new Set();
   let flushScheduled = false;
   let currentUrlPattern = null;
+  let currentHomepagePattern = null;
   let currentTitleKeyword = null;
   let currentSearchMatch = null;
   let pageIsBlocked = false;
@@ -260,6 +261,12 @@
   let persistentPageGateMatch = null;
   let activePageViewKey = '';
   let douyinHistoryContext = '';
+  let observedPageTitle = null;
+  let observedTitleUrl = '';
+  let previousPassiveView = false;
+  let stalePageTitle = null;
+  // 仅当前文档内、关闭帖子后已挂载背景的历史归位；不保存为站点权限。
+  let xiaohongshuBackgroundReturnUrl = '';
 
   const sessionId = global.crypto?.randomUUID?.() || (
     `page-${Date.now()}-${Math.random().toString(36).slice(2)}`
@@ -532,25 +539,31 @@
 
   function isVisiblePageElement(element) {
     if (!element) return false;
-    for (
-      let current = element;
-      current;
-      current = current.parentElement
-    ) {
-      if (current.hasAttribute?.('hidden') ||
-        current.getAttribute?.('aria-hidden') === 'true') {
-        return false;
-      }
-      try {
-        const style = global.getComputedStyle?.(current);
-        if (style?.display === 'none' || style?.visibility === 'hidden') {
-          return false;
+    // 门禁是扩展自己的显示效果，不能反过来改变详情/结果流的身份。
+    // 仅临时停用自己的 CSSOM 规则，不改 DOM 属性、不触发原站观察器。
+    const gated = global.document?.documentElement?.hasAttribute?.(PAGE_GATE_ATTR);
+    const gateRule = gated ? Array.from(
+      global.document?.getElementById?.(STYLE_ID)?.sheet?.cssRules || []
+    ).find(rule => rule.selectorText?.includes(`[${PAGE_GATE_ATTR}]`) &&
+      rule.selectorText?.includes('body >')) : null;
+    const visibility = gateRule?.style?.getPropertyValue('visibility');
+    const priority = gateRule?.style?.getPropertyPriority('visibility');
+    if (visibility) gateRule.style.removeProperty('visibility');
+    try {
+      for (let current = element; current; current = current.parentElement) {
+        if (current.hasAttribute?.('hidden') ||
+            current.getAttribute?.('aria-hidden') === 'true') return false;
+        try {
+          const style = global.getComputedStyle?.(current);
+          if (style?.display === 'none' || style?.visibility === 'hidden') return false;
+        } catch (error) {
+          // 样式尚未就绪时仍依据原站的 hidden/aria-hidden 判断。
         }
-      } catch (error) {
-        // 页面样式尚未就绪时，继续依靠其他祖先的 hidden/aria-hidden 证据。
       }
+      return true;
+    } finally {
+      if (visibility) gateRule.style.setProperty('visibility', visibility, priority);
     }
-    return true;
   }
 
   function textForElement(element) {
@@ -786,8 +799,8 @@
     if (element.matches?.('article, li')) return false;
     const controls = Array.from(element.querySelectorAll?.(INTERACTIVE_SELECTOR) || [])
       .filter(control => {
-        const parent = control.parentElement?.closest?.(INTERACTIVE_SELECTOR);
-        return !parent || parent === element || !element.contains?.(parent);
+        const interactiveParent = control.parentElement?.closest?.(INTERACTIVE_SELECTOR);
+        return !interactiveParent || interactiveParent === element || !element.contains?.(interactiveParent);
       });
     return controls.length > 1;
   }
@@ -880,7 +893,7 @@
   }
 
   function genericBlockingComponentForElement(element, adapterEntry) {
-    if (!isElement(element) || isBlockingFeedbackNode(element)) return null;
+    if (!isElement(element) || isBlockingNoticeNode(element)) return null;
     if (element.matches?.(MEDIA_SELECTOR)) return element;
     if (adapterEntry?.name === 'xiaohongshu') {
       if (isBlockingPageContainer(element, adapterEntry)) return null;
@@ -894,7 +907,7 @@
 
     let current = element;
     for (let depth = 0; current && depth < 10; depth += 1) {
-      if (!isElement(current) || isBlockingFeedbackNode(current)) break;
+      if (!isElement(current) || isBlockingNoticeNode(current)) break;
       if (isBlockingPageContainer(current, adapterEntry)) break;
       if (current === global.document?.body ||
           current === global.document?.documentElement) break;
@@ -1654,7 +1667,6 @@
         toContentId: match.contentId,
       },
     });
-    showFeedback(match, timestamp);
   }
 
   function shouldRestoreCommittedDepth3Url(
@@ -1829,11 +1841,12 @@
     applyDepth2Cleanup();
   }
 
-  function findUrlMatch(rawUrl) {
+  function findUrlMatch(rawUrl, includeHomepage = true) {
     const direct = rulesApi.findUrlPattern(rawUrl, rules.blockedUrlPatterns);
     if (direct) return direct;
     const absolute = absoluteUrl(rawUrl);
-    return rulesApi.findUrlPattern(absolute, rules.blockedUrlPatterns);
+    return rulesApi.findUrlPattern(absolute, rules.blockedUrlPatterns) ||
+      (includeHomepage ? rulesApi.findBlockedHomepage(absolute, rules.highRiskDomains, rules.homepageRules) : null);
   }
 
   function markExposure(node, match) {
@@ -1981,6 +1994,25 @@
     if (match) markExposure(null, match);
   }
 
+  function detailTitleConfirmsKeyword(keyword, adapterEntry) {
+    if (!keyword || !adapterEntry?.details?.length) return false;
+    const currentId = contentIdFromUrl(global.location.href, adapterEntry) || currentPageContentId();
+    for (const selector of adapterEntry.details) {
+      for (const detail of Array.from(global.document.querySelectorAll(selector))) {
+        if (!isVisiblePageElement(detail)) continue;
+        const heading = detail.querySelector?.(
+          'h1, #detail-title, [data-e2e="video-detail-title"], [data-e2e="video-desc"]'
+        );
+        if (!heading || !isVisiblePageElement(heading)) continue;
+        const owner = heading.closest?.('[data-note-id], [data-note-id-str], [data-aweme-id]');
+        const id = owner?.getAttribute('data-note-id') || owner?.getAttribute('data-note-id-str') || owner?.getAttribute('data-aweme-id');
+        if (!id || (currentId && currentId !== `${adapterEntry.name}:${id}`)) continue;
+        if (String(heading.textContent || '').includes(keyword)) return true;
+      }
+    }
+    return false;
+  }
+
   function updatePageState() {
     if (blockingEnabled !== true && !rules.homepageRules) return;
     const nextUrlPattern = blockingEnabled ? findUrlMatch(global.location.href, false) : null;
@@ -2013,17 +2045,33 @@
       onSearchResultsPage ||
       historyView.passive
     ) && !hasVisibleDetail;
-    const nextTitleKeyword = !blockingEnabled || onPassiveCollectionPage
+    const title = global.document.title || '';
+    const titleUrl = contentIdFromUrl(global.location.href, adapter) || normalizeNavigationUrl(global.location.href);
+    if (observedPageTitle !== null) {
+      if (title !== observedPageTitle) stalePageTitle = null;
+      else if (titleUrl !== observedTitleUrl ||
+          (previousPassiveView && hasVisibleDetail)) stalePageTitle = title;
+    }
+    observedPageTitle = title;
+    observedTitleUrl = titleUrl;
+    previousPassiveView = onPassiveCollectionPage;
+    const titleKeyword = rulesApi.findKeyword(title, rules.blockedKeywords);
+    const nextTitleKeyword = !blockingEnabled || onPassiveCollectionPage ||
+      (title === stalePageTitle && !detailTitleConfirmsKeyword(titleKeyword, adapter))
       ? null
-      : rulesApi.findKeyword(
-        global.document.title || '',
-        rules.blockedKeywords
-      );
+      : titleKeyword;
     const nextSearchMatch = blockingEnabled && onPassiveCollectionPage
       ? findSearchKeywordMatch(global.location.href)
       : null;
-    currentUrlPattern = nextUrlPattern;
-    currentHomepagePattern = nextHomepagePattern;
+    // 关闭详情后结果流已恢复时，残留详情地址不再是当前内容。
+    // 目标链接的 URL 仍由交互/导航入口单独按规则检查。
+    const staleDetailUrl = onPassiveCollectionPage && !isSearchResultsUrl(global.location.href) &&
+      Boolean(contentIdFromUrl(global.location.href, adapter));
+    currentUrlPattern = staleDetailUrl ? null : nextUrlPattern;
+    const returningToXiaohongshuBackground = adapter?.name === 'xiaohongshu' &&
+      onPassiveCollectionPage && xiaohongshuBackgroundReturnUrl &&
+      normalizeNavigationUrl(global.location.href) === xiaohongshuBackgroundReturnUrl;
+    currentHomepagePattern = returningToXiaohongshuBackground ? null : nextHomepagePattern;
     currentTitleKeyword = nextTitleKeyword;
     currentSearchMatch = nextSearchMatch;
     const detectedPageMatch = detectedPageBlockingMatch();
@@ -2213,11 +2261,14 @@
       target.appendChild(notice);
     }
     const pageMatch = currentPageBlockingMatch();
-    notice.textContent = pageMatch?.pageSource === 'url'
-      ? '当前地址已阻断，本次访问已记录。'
+    const noticeText = pageMatch?.pageSource === 'homepage'
+      ? '当前网站禁止访问主页。'
+      : pageMatch?.pageSource === 'url'
+        ? '当前地址已阻断，本次访问已记录。'
       : pageMatch?.pageSource === 'search'
         ? '当前搜索词已阻断，本次访问已记录。'
         : '当前页面标题包含已阻断内容，本次访问已记录。';
+    if (notice.textContent !== noticeText) notice.textContent = noticeText;
   }
 
   function detectedPageBlockingMatch() {
@@ -2239,6 +2290,7 @@
       };
     }
     if (currentSearchMatch) return currentSearchMatch;
+    if (currentHomepagePattern) return { kind: 'url', value: currentHomepagePattern, targetUrl: pageUrl, pageSource: 'homepage' };
     return null;
   }
 
@@ -2272,6 +2324,10 @@
   ) {
     if (!gateMatch) return false;
     if (gateMatch.pageSource === 'homepage' && (detectedMatch?.pageSource !== 'homepage' || detectedMatch.value !== gateMatch.value)) return true;
+    if (gateMatch.pageSource === 'title' &&
+        (detectedMatch?.pageSource !== 'title' || detectedMatch.value !== gateMatch.value)) return true;
+    if (gateMatch.pageSource === 'url' && onPassiveCollectionPage && !hasCurrentContent &&
+        (detectedMatch?.pageSource !== 'url' || detectedMatch.value !== gateMatch.value)) return true;
     if (gateMatch.pageViewKey) {
       return gateMatch.pageViewKey !== currentViewKey;
     }
@@ -2283,33 +2339,15 @@
       detectedMatch.value !== gateMatch.value;
   }
 
-  function clearFeedbackArtifactsForPageChange() {
-    finishFeedbackPause();
-    global.clearTimeout?.(showTemporaryNotice.timer);
-    showTemporaryNotice.timer = null;
-    global.clearTimeout?.(flashBlockingFeedback.timer);
-    flashBlockingFeedback.timer = null;
-    global.clearTimeout?.(showBlockingImageFeedback.timer);
-    showBlockingImageFeedback.timer = null;
-    for (const id of [
-      NOTICE_ID,
-      TRANSIENT_FEEDBACK_IMAGE_ID,
-      PERSISTENT_FEEDBACK_IMAGE_ID,
-      FEEDBACK_PAUSE_ID,
-    ]) {
-      global.document?.getElementById?.(id)?.remove?.();
-    }
-    global.document?.documentElement?.classList?.remove?.(
-      'mysearch-blocking-grayout',
-      'mysearch-blocking-feedback-flash'
-    );
+  function clearPageNoticeForPageChange() {
+    global.document?.getElementById?.(NOTICE_ID)?.remove?.();
     global.document?.documentElement?.removeAttribute?.(PAGE_GATE_ATTR);
   }
 
   function clearPersistentPageGate() {
     if (!persistentPageGateMatch) return false;
     persistentPageGateMatch = null;
-    clearFeedbackArtifactsForPageChange();
+    clearPageNoticeForPageChange();
     return true;
   }
 
@@ -2345,17 +2383,12 @@
     if (persistentPageGateMatch || !match) return false;
     persistentPageGateMatch = {
       ...match,
-      persistentPageGate: true,
       pageViewKey: currentViewKey,
     };
     pageIsBlocked = true;
     if (typeof renderPageNotice === 'function') renderPageNotice();
-    showPersistentPageGateImage();
     pausePageMedia();
-    const timestamp = recordClick(persistentPageGateMatch);
-    if (timestamp != null) {
-      showFeedback(persistentPageGateMatch, timestamp);
-    }
+    recordClick(persistentPageGateMatch);
     return true;
   }
 
@@ -2428,7 +2461,6 @@
   function recordClick(match) {
     const timestamp = now();
     if (!allowDeduplicatedAttempt(match)) return null;
-    blockedClickCount += 1;
     void sendMessage({
       type: 'RECORD_BLOCKING_EVENT',
       event: {
@@ -2445,270 +2477,7 @@
     return timestamp;
   }
 
-  function showFeedback(match, timestamp) {
-    const current = timestamp || now();
-    showTemporaryNotice(
-      `内容已阻断。本次冲动点击已记录（第 ${blockedClickCount} 次）。\n` +
-      '冲动不是命令。停一下，识别它，然后回到原来的任务。'
-    );
-    flashBlockingFeedback();
-    showBehaviorPauseFeedback();
-    const feedbackImageAsset = match.persistentPageGate
-      ? showPersistentPageGateImage()
-      : showBlockingImageFeedback();
-
-    const feedbackType = 'aversive+pause+beep+photo';
-    const interval = lastAttemptAt == null ? null : current - lastAttemptAt;
-    if (lastFeedbackEventId && interval != null) {
-      void sendMessage({
-        type: 'UPDATE_FEEDBACK_OUTCOME',
-        eventId: lastFeedbackEventId,
-        nextBlockedAttemptInterval: interval,
-        whetherRetriedWithin10Minutes: interval <= 10 * 60 * 1000,
-      });
-    }
-    lastAttemptAt = current;
-    lastFeedbackEventId = eventId('feedback');
-    void sendMessage({
-      type: 'RECORD_BLOCKING_EVENT',
-      event: {
-        id: lastFeedbackEventId,
-        type: 'feedback',
-        feedbackType,
-        feedbackImageAsset,
-        pauseDurationMs: 5000,
-        soundProfile: 'short-high-frequency-safe',
-        trainingPrompt: '识别冲动，不执行，回到原任务',
-        keyword: match.kind === 'keyword' ? match.value : '',
-        urlPattern: match.kind === 'url' ? match.value : '',
-        timestamp: current,
-        nextBlockedAttemptInterval: null,
-        whetherRetriedWithin10Minutes: null,
-        sessionId,
-      },
-    });
-
-    playBeep();
-  }
-
-  function flashBlockingFeedback() {
-    const root = global.document?.documentElement;
-    if (!root?.classList) return;
-    root.classList.add('mysearch-blocking-feedback-flash');
-    global.clearTimeout(flashBlockingFeedback.timer);
-    flashBlockingFeedback.timer = global.setTimeout(() => {
-      root.classList.remove('mysearch-blocking-feedback-flash');
-    }, 650);
-  }
-
-  function selectBlockingFeedbackImage() {
-    return NEGATIVE_FEEDBACK_ASSETS[
-      Math.floor(Math.random() * NEGATIVE_FEEDBACK_ASSETS.length)
-    ];
-  }
-
-  function renderBlockingFeedbackImage(
-    imageId,
-    feedbackImage,
-    onReveal
-  ) {
-    if (!canCreateDocumentNodes()) return '';
-    const target = visibleDocumentAppendTarget();
-    if (!target) return '';
-
-    let image = global.document.getElementById(imageId);
-    if (!image) {
-      image = global.document.createElement('img');
-      image.id = imageId;
-      image.alt = '厌恶反馈：内容已阻断';
-      image.setAttribute('aria-hidden', 'true');
-      target.appendChild(image);
-    }
-    image.setAttribute('data-feedback-asset', feedbackImage);
-    let imageUrl = '';
-    try {
-      imageUrl = global.chrome?.runtime?.getURL?.(feedbackImage) || '';
-    } catch (error) {
-      imageUrl = '';
-    }
-    const fallbackImageUrl =
-      'data:image/svg+xml;charset=utf-8,' +
-      encodeURIComponent(FALLBACK_FEEDBACK_IMAGE);
-
-    const revealImage = () => {
-      target.appendChild(image);
-      image.classList.add('visible');
-      if (typeof onReveal === 'function') onReveal(image);
-    };
-
-    image.onload = revealImage;
-    image.onerror = () => {
-      image.onerror = null;
-      image.src = fallbackImageUrl;
-    };
-    image.src = imageUrl || fallbackImageUrl;
-    if (image.complete && image.naturalWidth > 0) {
-      revealImage();
-    }
-    return feedbackImage;
-  }
-
-  function showBlockingImageFeedback() {
-    const feedbackImage = selectBlockingFeedbackImage();
-    return renderBlockingFeedbackImage(
-      TRANSIENT_FEEDBACK_IMAGE_ID,
-      feedbackImage,
-      (image) => {
-        global.clearTimeout(showBlockingImageFeedback.timer);
-        showBlockingImageFeedback.timer = global.setTimeout(() => {
-          image.classList.remove('visible');
-        }, 5000);
-      }
-    );
-  }
-
-  function showPersistentPageGateImage() {
-    if (!persistentPageGateMatch) return '';
-    const feedbackImage =
-      persistentPageGateMatch.feedbackImageAsset ||
-      selectBlockingFeedbackImage();
-    persistentPageGateMatch.feedbackImageAsset = feedbackImage;
-
-    const existing = global.document?.getElementById?.(
-      PERSISTENT_FEEDBACK_IMAGE_ID
-    );
-    if (
-      existing?.getAttribute?.('data-feedback-asset') ===
-      feedbackImage
-    ) {
-      existing.classList?.add('visible');
-      return feedbackImage;
-    }
-
-    return renderBlockingFeedbackImage(
-      PERSISTENT_FEEDBACK_IMAGE_ID,
-      feedbackImage
-    );
-  }
-
-  function playBeep() {
-    try {
-      // AudioContext 只能在用户当前操作期间创建；拦截页面上的被动事件时
-      // 没有这个条件，Chromium 会把创建行为记录为扩展错误。
-      const userActivation = global.navigator?.userActivation;
-      if (!userActivation || userActivation.isActive !== true) return;
-      const AudioContextClass = global.AudioContext || global.webkitAudioContext;
-      if (!AudioContextClass) return;
-      const context = new AudioContextClass();
-      const oscillator = context.createOscillator();
-      const gain = context.createGain();
-      oscillator.type = 'square';
-      // 这是短促、低音量的高频提示，不把系统音量推到危险范围。
-      oscillator.frequency.setValueAtTime(2800, context.currentTime);
-      oscillator.frequency.exponentialRampToValueAtTime(
-        1800,
-        context.currentTime + 0.12
-      );
-      gain.gain.setValueAtTime(0.03, context.currentTime);
-      gain.gain.exponentialRampToValueAtTime(
-        0.001,
-        context.currentTime + 0.14
-      );
-      oscillator.connect(gain).connect(context.destination);
-      const startTone = () => {
-        oscillator.start();
-        oscillator.stop(context.currentTime + 0.14);
-      };
-      if (context.state === 'suspended' &&
-        typeof context.resume === 'function') {
-        void context.resume().then(startTone).catch(() => {
-          context.close?.().catch?.(() => {});
-        });
-      } else {
-        startTone();
-      }
-      oscillator.addEventListener?.('ended', () => {
-        context.close?.().catch?.(() => {});
-      }, { once: true });
-    } catch (error) {
-      // 浏览器拒绝音频时，文字反馈仍然生效。
-    }
-  }
-
-  function showTemporaryNotice(message) {
-    if (!canCreateDocumentNodes()) return;
-    installStyle();
-    let notice = global.document.getElementById(NOTICE_ID);
-    if (!notice) {
-      const target = visibleDocumentAppendTarget();
-      if (!target) return;
-      notice = global.document.createElement('div');
-      notice.id = NOTICE_ID;
-      notice.setAttribute('role', 'alert');
-      target.appendChild(notice);
-    }
-    notice.classList.add('feedback');
-    notice.textContent = message;
-    global.clearTimeout(showTemporaryNotice.timer);
-    showTemporaryNotice.timer = global.setTimeout(() => {
-      notice.classList.remove('feedback');
-      renderPageNotice();
-    }, 1800);
-  }
-
-  function finishFeedbackPause() {
-    feedbackPauseUntil = 0;
-    if (feedbackPauseTimer != null) {
-      global.clearTimeout(feedbackPauseTimer);
-      feedbackPauseTimer = null;
-    }
-    if (feedbackPauseInterval != null) {
-      global.clearInterval(feedbackPauseInterval);
-      feedbackPauseInterval = null;
-    }
-    const pause = global.document?.getElementById?.(FEEDBACK_PAUSE_ID);
-    if (pause) {
-      pause.hidden = true;
-      pause.setAttribute('aria-hidden', 'true');
-    }
-  }
-
-  function showBehaviorPauseFeedback() {
-    if (!canCreateDocumentNodes()) return;
-    installStyle();
-    const target = visibleDocumentAppendTarget();
-    if (!target) return;
-    let pause = global.document.getElementById(FEEDBACK_PAUSE_ID);
-    if (!pause) {
-      pause = global.document.createElement('div');
-      pause.id = FEEDBACK_PAUSE_ID;
-      pause.setAttribute('role', 'alert');
-      pause.setAttribute('aria-live', 'assertive');
-      pause.setAttribute('aria-hidden', 'false');
-      pause.tabIndex = -1;
-      target.appendChild(pause);
-    }
-    const duration = 5000;
-    feedbackPauseUntil = now() + duration;
-    pause.hidden = false;
-    pause.setAttribute('aria-hidden', 'false');
-    const render = () => {
-      const remaining = Math.max(0, feedbackPauseUntil - now());
-      const seconds = Math.ceil(remaining / 1000);
-      pause.textContent = seconds > 0
-        ? `先停 ${seconds} 秒\n内容不会打开，点击已记录。`
-        : '可以继续工作。';
-    };
-    render();
-    if (feedbackPauseTimer != null) global.clearTimeout(feedbackPauseTimer);
-    if (feedbackPauseInterval != null) {
-      global.clearInterval(feedbackPauseInterval);
-    }
-    feedbackPauseInterval = global.setInterval(render, 250);
-    feedbackPauseTimer = global.setTimeout(finishFeedbackPause, duration);
-  }
-
-  function persistentGateEventNeedsFeedback(event) {
+  function shouldRecordPageAttempt(event) {
     if (event?.type === 'keydown') {
       return !event.isComposing &&
         ['Enter', ' ', 'Spacebar'].includes(event.key);
@@ -2753,17 +2522,22 @@
     } catch (error) {
       // 页面可能锁定媒体方法；默认动作仍保持阻断。
     }
-    if (persistentGateEventNeedsFeedback(event)) {
-      const timestamp = recordClick(persistentPageGateMatch);
-      if (timestamp != null) {
-        showFeedback(persistentPageGateMatch, timestamp);
-      }
-    }
+    if (shouldRecordPageAttempt(event)) recordClick(persistentPageGateMatch);
     return true;
   }
 
   function blockEvent(event, match) {
     if (!match) return;
+    if (event?.type === 'mysearch-blocking-navigation-attempt' && typeof global !== 'undefined') {
+      try {
+        const pathname = value => new URL(value || global.location.href, global.location.href).pathname;
+        const trace = global.__mySearchBlockingNavigationTrace || [];
+        trace.push({ navigationKind: event.detail?.navigationKind || '',
+          from: pathname(global.location.href), to: pathname(event.detail?.url),
+          kind: match.kind, value: match.value });
+        global.__mySearchBlockingNavigationTrace = trace.slice(-12);
+      } catch (_) { /* 诊断不可影响原有阻断。 */ }
+    }
     event.preventDefault();
     event.stopPropagation();
     event.stopImmediatePropagation();
@@ -2806,6 +2580,30 @@
     }
   }
 
+  function allowXiaohongshuDetailReturn(targetUrl) {
+    const adapter = depthAdapterEntry();
+    if (adapter?.name !== 'xiaohongshu' || hasVisibleDetailRoot(adapter) ||
+        !hasVisibleSearchResultsRoot(adapter)) return false;
+    try {
+      const current = new URL(global.location.href);
+      const destination = new URL(targetUrl, current.href);
+      if (destination.origin !== current.origin ||
+          !rulesApi.findBlockedHomepage(destination.href, rules.highRiskDomains, rules.homepageRules)) return false;
+      if (blockingEnabled && findUrlMatch(destination.href, false)) return false;
+      const fromNote = Boolean(contentIdFromUrl(current.href, adapter));
+      const continuingBackground = xiaohongshuBackgroundReturnUrl &&
+        normalizeNavigationUrl(current.href) === xiaohongshuBackgroundReturnUrl;
+      if (!fromNote && !continuingBackground) return false;
+      // 让原站同一次原生 replaceState 原样写入 URL 和完整 state。
+      // 不事后改地址，不伪造 back/current/position，也不拦掉原生返回值。
+      xiaohongshuBackgroundReturnUrl = normalizeNavigationUrl(destination.href);
+      clearPersistentPageGate();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   function handlePageNavigation(event) {
     if (blockingEnabled !== true && !rules.homepageRules) return;
     const targetUrl = event.detail?.url || '';
@@ -2814,6 +2612,8 @@
       blockEvent(event, searchMatch);
       return;
     }
+    if (event.detail?.navigationKind === 'replaceState' &&
+        allowXiaohongshuDetailReturn(targetUrl)) return;
     const targetUrlPattern = blockingEnabled ? findUrlMatch(targetUrl)
       : rulesApi.findBlockedHomepage(absoluteUrl(targetUrl), rules.highRiskDomains, rules.homepageRules);
     if (targetUrlPattern) {
@@ -2885,7 +2685,7 @@
   }
 
   function handleMediaAttempt(event) {
-    if (blockingEnabled !== true) return;
+    if (blockingEnabled !== true && !pageIsBlocked) return;
     if (blockPersistentPageEvent(event)) return;
     if (
       DEPTH_NAVIGATION_ENFORCEMENT_ENABLED === true &&
@@ -2911,7 +2711,7 @@
   }
 
   function handleNativeMediaPlay(event) {
-    if (blockingEnabled !== true) return;
+    if (blockingEnabled !== true && !pageIsBlocked) return;
     blockPersistentPageEvent(event);
   }
 
@@ -2979,13 +2779,16 @@
   }
 
   function applyRules(nextRules) {
+    xiaohongshuBackgroundReturnUrl = '';
     restoreBlockedCards();
     rules = rulesApi.normalizeRules(nextRules);
+    rules.homepageRules = nextRules?.homepageRules;
     rulesLoaded = true;
-    if (blockingEnabled !== true) return;
+    if (blockingEnabled !== true && !rules.homepageRules) return;
     currentUrlPattern = null;
     currentTitleKeyword = null;
     currentSearchMatch = null;
+    currentHomepagePattern = null;
     pageExposureRecorded = new Set();
     exposureMap = new WeakMap();
     updatePageState();
@@ -3034,23 +2837,13 @@
     currentUrlPattern = null;
     currentTitleKeyword = null;
     currentSearchMatch = null;
+    currentHomepagePattern = null;
     activePageViewKey = '';
     douyinHistoryContext = '';
     lastRejectedContentId = '';
     recentAttempts.clear();
     clearPersistentPageGate();
-    finishFeedbackPause();
-    global.clearTimeout?.(showTemporaryNotice.timer);
-    showTemporaryNotice.timer = null;
-    global.document?.getElementById?.(NOTICE_ID)?.remove?.();
-    global.document?.getElementById?.(TRANSIENT_FEEDBACK_IMAGE_ID)?.remove?.();
-    global.document?.getElementById?.(PERSISTENT_FEEDBACK_IMAGE_ID)?.remove?.();
-    global.document?.getElementById?.(FEEDBACK_PAUSE_ID)?.remove?.();
-    global.document?.documentElement?.classList?.remove?.(
-      'mysearch-blocking-grayout',
-      'mysearch-blocking-feedback-flash'
-    );
-    global.document?.documentElement?.removeAttribute?.(PAGE_GATE_ATTR);
+    clearPageNoticeForPageChange();
     restoreBlockedCards();
     for (const node of Array.from(
       global.document?.querySelectorAll?.(
@@ -3086,6 +2879,7 @@
     blockingEnabled = enabled !== false;
     if (!blockingEnabled) {
       clearBlockingArtifacts();
+      if (rules.homepageRules) updatePageState();
       return;
     }
     updatePageState();
@@ -3164,6 +2958,8 @@
   });
 
   init();
+  // 仅当前扩展隔离世界初始化成功后置位，不能用残留 DOM 标记替代。
+  global.__mySearchBlockingRuntimeVersion = BLOCKING_RUNTIME_VERSION;
   if (global.document.readyState === 'loading') {
     if (typeof global.document.addEventListener === 'function') {
       global.document.addEventListener('DOMContentLoaded', () => {

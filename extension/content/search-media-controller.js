@@ -22,6 +22,36 @@
   const styles = new Map();
   const players = new Map();
   const retainedCards = new WeakSet();
+  let detailAncestors = new Set();
+
+  function collectDetailAncestors() {
+    const ancestors = new Set();
+    if (adapter.domain !== 'douyin.com') return ancestors;
+    for (const detail of query(document, adapter.details)) {
+      const chain = [];
+      let active = true;
+      for (let node = detail; node; node = node.parentElement) {
+        if (node.hasAttribute('hidden') || node.getAttribute('aria-hidden') === 'true') {
+          active = false;
+          break;
+        }
+        const computed = getComputedStyle(node);
+        for (const [property, hiddenValue] of [['display', 'none'], ['visibility', 'hidden']]) {
+          const state = styles.get(node)?.get(property);
+          // Our own hiding must not make an active portal look closed. A
+          // site's updated value, or its saved original, still owns dismissal.
+          const value = state && sameStyle(readStyle(node, property), state.applied)
+            ? state.original.value
+            : computed.getPropertyValue(property);
+          if (value === hiddenValue) active = false;
+        }
+        if (!active) break;
+        if (node !== detail) chain.push(node);
+      }
+      if (active) for (const node of chain) ancestors.add(node);
+    }
+    return ancestors;
+  }
   const mediaSelector = 'img, picture, video, canvas';
   let enabled = false;
   let scheduled = false;
@@ -421,12 +451,24 @@ html[${RETURN_GUARD_ATTR}] ${root} {
   }
 
   function addStyle(desired, node, properties) {
+    // Douyin can reuse a suppressed result cover as the detail portal host.
+    // Do not collapse/reflow that host; unrelated media below it stays hidden.
+    if (detailAncestors.has(node)) return;
     let entry = desired.get(node);
     if (!entry) desired.set(node, entry = new Map());
     for (const [property, value] of Object.entries(properties)) entry.set(property, value);
   }
 
   function hasText(node) {
+    if (adapter.domain === 'douyin.com') {
+      // Cached detail controls are not result text. Counting them keeps an
+      // otherwise empty fixed cover visible after close, intercepting clicks.
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) {
+        if (/\S/.test(walker.currentNode.nodeValue) && !inDetail(walker.currentNode.parentElement)) return true;
+      }
+      return false;
+    }
     return Boolean(node.textContent.replace(/\s+/g, '').length);
   }
 
@@ -752,6 +794,7 @@ html[${RETURN_GUARD_ATTR}] ${root} {
       detailRoutePath = null;
       clearReturnGuard();
     }
+    detailAncestors = enabled ? collectDetailAncestors() : new Set();
     const desired = new Map();
     const desiredPlayers = new Set();
     if (enabled) {

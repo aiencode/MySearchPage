@@ -148,3 +148,10 @@ node tests/extension-search-media-return.browser.cjs
 ```
 
 该测试仍是离线真实浏览器时序模型，不冒充用户当前线上页面的完整 DOM 取证。
+
+## 抖音连续详情开关修复回归
+
+- S-10 新增“复用封面容器连续打开关闭四个详情不隐藏播放器祖先”：详情挂入原先隐藏的固定封面容器时恢复祖先布局，背景预览保持隐藏/暂停；关闭后忽略缓存详情内部文字，空封面重新隐藏。交替覆盖隐藏缓存与移除详情节点，下一次结果点击仍送达站点处理器。
+- `tests/extension-search-media-douyin-repeat.browser.cjs` 通过真实扩展和 Chromium 156 的离线代表页，按结果一→结果二→结果三→结果一进行四次真实点击开关；视频使用 canvas.captureStream，检查 currentTime 推进、未静音、画面矩形及祖先可见、固定定位/高度保留、背景媒体隐藏和关闭后空壳收起。
+- 崩溃后串行重跑：媒体核心 100 项、设置 16 项、播放器布局 2 项全部通过；上述浏览器四轮通过。崩溃中断的早期运行不计为通过。证据日志存放在本会话 scratch 的 `media-core-resumed.log`、`media-settings-resumed.log`、`browser-repeat-resumed.log`。
+- 此回归没有联网加载真实抖音内容，不宣称线上全站 E2E 或硬件音频输出通过。

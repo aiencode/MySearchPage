@@ -454,7 +454,7 @@ function makeBackgroundHarness({ rules, globalEnabled, tabs }) {
         events.push({ type: 'dnr.update', change: clone(change) });
       },
     },
-    runtime: { onMessage: { addListener(listener) { messageListener = listener; } } },
+    runtime: { onMessage: { addListener(listener) { messageListener = listener; } }, getURL(value) { return value; } },
     storage: {
       local: {
         async get(keys) { return typeof keys === 'string' ? { [keys]: stored[keys] } : clone(stored); },
@@ -470,6 +470,12 @@ function makeBackgroundHarness({ rules, globalEnabled, tabs }) {
   const sandbox = { chrome, console: { error() {}, log() {}, warn() {} }, Promise, setTimeout, clearTimeout };
   sandbox.globalThis = sandbox;
   vm.createContext(sandbox);
+  sandbox.importScripts = (...files) => {
+    for (const file of files) {
+      vm.runInContext(read(path.posix.join('extension', file)), sandbox, { filename: file });
+    }
+  };
+  sandbox.URL = URL;
   vm.runInContext(read('extension/background/ua-controller.js'), sandbox, { filename: 'extension/background/ua-controller.js' });
   return {
     stored,
@@ -1081,7 +1087,8 @@ test('TC-RUNTIME-012: delete, import, and reset reload only tabs whose effective
       'bilibili.com': { enabled: true, uaMode: 'mobile', presetKey: 'android_chrome', uiTransform: true },
     } });
     assert.equal(harness.stored.uaRules['bilibili.com'].uaMode, 'mobile');
-    assert.deepEqual(harness.dynamicRules, [], 'global-off state must leave no effective dynamic UA rules');
+    assert.deepEqual(harness.dynamicRules.filter(ruleChangesUserAgent), [], 'global-off state must leave no effective dynamic UA rules');
+    assert.ok(harness.dynamicRules.some(rule => rule.action.type === 'block'), 'independent homepage permissions must survive the UA switch');
     assert.deepEqual(harness.events.filter((event) => event.type === 'tabs.reload').map((event) => event.tabId), []);
   });
 });

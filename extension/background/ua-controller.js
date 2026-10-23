@@ -406,7 +406,10 @@ if (chrome.tabs?.onRemoved) {
   });
 }
 
-async function reconnectSearchMediaTabsBG(includeAllSites = false) {
+async function reconnectSearchMediaTabsBG({
+  includeAllSites = false,
+  allowRuntimeReload = false,
+} = {}) {
   if (
     typeof chrome.tabs?.query !== 'function' ||
     typeof chrome.scripting?.executeScript !== 'function'
@@ -424,20 +427,30 @@ async function reconnectSearchMediaTabsBG(includeAllSites = false) {
   for (const tab of tabs) {
     if (!Number.isInteger(tab.id) || tab.discarded) continue;
     try {
-      const probeResults = await chrome.scripting.executeScript({
-        target: { tabId: tab.id, frameIds: [0] },
-        func: attributeName =>
-          document.documentElement?.getAttribute(attributeName) || '',
-        args: [BLOCKING_RUNTIME_ATTR_BG],
-      });
-      const runtimeVersion = probeResults?.[0]?.result || '';
-      if (
-        runtimeVersion !== BLOCKING_RUNTIME_VERSION_BG &&
-        typeof chrome.tabs?.reload === 'function'
-      ) {
-        await chrome.tabs.reload(tab.id);
-        reloaded += 1;
-        continue;
+      // 页面标记可能被原站重建 DOM 清除，不能据此在普通唤醒时刷新。
+      // 只有安装/更新或用户显式重连，才允许刷新以清除不兼容的旧脚本。
+      if (allowRuntimeReload) {
+        const probeResults = await chrome.scripting.executeScript({
+          target: { tabId: tab.id, frameIds: [0] },
+          // DOM 标记跨扩展重载仍会残留；必须同时检查当前隔离世界。
+          func: attributeName => ({
+            marker: document.documentElement?.getAttribute(attributeName) || '',
+            activeVersion: globalThis.__mySearchBlockingRuntimeVersion || '',
+            rulesApiPresent: Boolean(globalThis.MySearchBlockingRules),
+          }),
+          args: [BLOCKING_RUNTIME_ATTR_BG],
+        });
+        const runtime = probeResults?.[0]?.result;
+        if (
+          (runtime?.marker !== BLOCKING_RUNTIME_VERSION_BG ||
+            runtime?.activeVersion !== BLOCKING_RUNTIME_VERSION_BG ||
+            !runtime?.rulesApiPresent) &&
+          typeof chrome.tabs?.reload === 'function'
+        ) {
+          await chrome.tabs.reload(tab.id);
+          reloaded += 1;
+          continue;
+        }
       }
       if (!mediaTabIds.has(tab.id)) continue;
       await chrome.scripting.executeScript({
@@ -485,7 +498,7 @@ async function injectNativeSearchRedirectTabsBG() {
 }
 
 chrome.runtime?.onInstalled?.addListener(() => {
-  void reconnectSearchMediaTabsBG();
+  void reconnectSearchMediaTabsBG({ allowRuntimeReload: true });
   void injectNativeSearchRedirectTabsBG();
 });
 
@@ -494,8 +507,8 @@ chrome.runtime?.onStartup?.addListener(() => {
   void injectNativeSearchRedirectTabsBG();
 });
 
-// 解压扩展手动重载会重新启动 Service Worker，但不保证旧页面重新
-// 注入 content script。版本探测只决定是否重载标签，不代表开关状态。
+// MV3 Service Worker 会在闲置后终止，普通页面消息也会重新执行顶层代码。
+// 此处只能无刷新地接回脚本；不能把每次唤醒都当成扩展安装/更新。
 void reconnectSearchMediaTabsBG();
 void injectNativeSearchRedirectTabsBG();
 
@@ -640,7 +653,8 @@ function buildDynamicRules(uaRules, globalEnabled) {
 
     rules.push({
       id: id++,
-      priority: 1,
+      // 保持 UA 修改高于主页搜索/详情例外的 allow 规则。
+      priority: 200,
       action: {
         type: 'modifyHeaders',
         requestHeaders: [
@@ -665,6 +679,7 @@ function buildDynamicRules(uaRules, globalEnabled) {
       },
     });
   }
+  rules.push(...MySearchBlockingRules.createHomepageNetworkRules(uaRules, id));
 
   ruleIdCounter = id;
   return rules;
@@ -675,7 +690,24 @@ function buildDynamicRules(uaRules, globalEnabled) {
  * @param {object} uaRules
  * @param {boolean} globalEnabled
  */
+async function restoreHomepageTabsBG(domain, previousRule) {
+  if (!chrome.tabs?.query || !chrome.tabs?.reload) return;
+  const tabs = await chrome.tabs.query({});
+  for (const tab of tabs) {
+    if (!Number.isInteger(tab.id) || tab.discarded) continue;
+    const targetUrl = tab.pendingUrl || tab.url || '';
+    const previousMatch = MySearchBlockingRules.findBlockedHomepage(targetUrl, [], { [domain]: previousRule });
+    if (previousMatch && MySearchBlockingRules.homepageDomain(targetUrl) === domain) {
+      try { await chrome.tabs.reload(tab.id); }
+      catch (error) { console.warn('[UA Controller] 首页标签已关闭或无法重新加载:', tab.id); }
+    }
+  }
+}
+
+let dynamicRuleUpdatesBG = Promise.resolve();
+
 async function applyDynamicRules(uaRules, globalEnabled) {
+  const apply = async () => {
   try {
     // 获取现有动态规则的 ID
     const existingRules = await chrome.declarativeNetRequest.getDynamicRules();
@@ -694,13 +726,18 @@ async function applyDynamicRules(uaRules, globalEnabled) {
       `[UA Controller] 已更新 ${newRules.length} 条 UA 规则`,
       newRules.map((r) => ({
         id: r.id,
-        domain: r.condition.urlFilter,
-        ua: r.action.requestHeaders[0].value.substring(0, 50) + '...',
+        domain: r.condition.urlFilter || r.condition.regexFilter,
+        action: r.action.type,
       }))
     );
   } catch (e) {
     console.error('[UA Controller] 更新动态规则失败:', e);
+    throw e;
   }
+  };
+  const operation = dynamicRuleUpdatesBG.catch(() => {}).then(apply);
+  dynamicRuleUpdatesBG = operation;
+  return operation;
 }
 
 // ============================================
@@ -975,7 +1012,20 @@ function openBlockingStatsDBBG() {
     const request = indexedDB.open(BLOCKING_STATS_DB_BG, BLOCKING_STATS_DB_VERSION_BG);
     request.onupgradeneeded = () => {
       const db = request.result;
-      if (db.objectStoreNames.contains(BLOCKING_STATS_STORE_BG)) return;
+      if (db.objectStoreNames.contains(BLOCKING_STATS_STORE_BG)) {
+        const entries = request.transaction.objectStore(BLOCKING_STATS_STORE_BG).openCursor();
+        entries.onsuccess = () => {
+          const cursor = entries.result;
+          if (!cursor) return;
+          try {
+            cursor.update(normalizeBlockingEventBG(cursor.value));
+          } catch (error) {
+            cursor.delete();
+          }
+          cursor.continue();
+        };
+        return;
+      }
       const store = db.createObjectStore(BLOCKING_STATS_STORE_BG, { keyPath: 'id' });
       store.createIndex('type', 'type', { unique: false });
       store.createIndex('timestamp', 'timestamp', { unique: false });
@@ -1171,7 +1221,10 @@ async function handleMessage(message, sender, sendResponse) {
       case 'RECONNECT_SEARCH_MEDIA_TABS': {
         sendResponse({
           success: true,
-          ...(await reconnectSearchMediaTabsBG(true)),
+          ...(await reconnectSearchMediaTabsBG({
+            includeAllSites: true,
+            allowRuntimeReload: true,
+          })),
         });
         break;
       }
@@ -1275,13 +1328,29 @@ async function handleMessage(message, sender, sendResponse) {
           [STORAGE_KEYS_BG.UA_RULES]: rules,
         });
         const globalEnabled = await getGlobalEnabledBG();
-        await applyDynamicRules(rules, globalEnabled);
+        try {
+          await applyDynamicRules(rules, globalEnabled);
+        } catch (error) {
+          const stored = await getUARulesBG();
+          if (JSON.stringify(stored[domain]) === JSON.stringify(rules[domain])) {
+            if (Object.keys(previousRule).length) stored[domain] = previousRule;
+            else delete stored[domain];
+            await chrome.storage.local.set({ [STORAGE_KEYS_BG.UA_RULES]: stored });
+            await applyDynamicRules(stored, globalEnabled).catch(() => {});
+          }
+          throw error;
+        }
         const liveBehaviorChanged = globalEnabled && LIVE_RULE_FIELDS_BG.some((field) => (
           Object.prototype.hasOwnProperty.call(rule, field) &&
           rule[field] !== previousRule[field]
         ));
         if (liveBehaviorChanged) {
           await reloadOpenMatchingTabsBG([domain]);
+        }
+        if (!liveBehaviorChanged &&
+            !MySearchBlockingRules.isHomepageAllowed(domain, previousRule) &&
+            MySearchBlockingRules.isHomepageAllowed(domain, rules[domain])) {
+          await restoreHomepageTabsBG(domain, previousRule);
         }
         sendResponse({ success: true });
         break;
@@ -1382,9 +1451,13 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 // ============================================
 
 async function initRules() {
-  const rules = await getUARulesBG();
-  const globalEnabled = await getGlobalEnabledBG();
-  await applyDynamicRules(rules, globalEnabled);
+  try {
+    const rules = await getUARulesBG();
+    const globalEnabled = await getGlobalEnabledBG();
+    await applyDynamicRules(rules, globalEnabled);
+  } catch (error) {
+    console.error('[UA Controller] 规则初始化失败:', error);
+  }
 }
 
 // 启动

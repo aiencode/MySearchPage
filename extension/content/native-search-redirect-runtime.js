@@ -157,6 +157,19 @@
     }),
   });
 
+  // 搜索浮层清理不得删除正文详情，也不得删除承载详情的共同外壳。
+  const CONTENT_DETAIL_SELECTOR = [
+    '.note-detail-mask', '.note-detail-container', '.note-detail', '.note-container',
+    '[class*="noteDetailMask"]', '[class*="noteDetailContainer"]',
+    '[data-e2e="modal-video-container"]', '[data-e2e="video-detail-modal"]',
+    '[data-e2e="video-detail"]', '[data-e2e="detail-video"]',
+    '[data-e2e="video-detail-container"]', '[data-e2e="modal-video"]',
+    '#slidelist', '[data-e2e="slideList"]', '[data-e2e="feed-item"]',
+    '[data-e2e="feed-active-video"]', '.video-detail-modal',
+    '#video-page', '.video-detail-container', '.video-container-v1', '.bili-video-modal',
+    'ytd-watch-flexy', 'ytd-watch-grid', 'ytm-watch', 'ytm-watch-page', 'ytm-player-page',
+  ].join(',');
+
   const DYNAMIC_POPUP_CANDIDATE_SELECTOR = [
     '[role="listbox"]',
     '[role="dialog"]',
@@ -281,6 +294,11 @@
     element.parentNode?.removeChild?.(element);
   }
 
+  function containsContentDetail(element) {
+    return Boolean(element?.matches?.(CONTENT_DETAIL_SELECTOR) ||
+      element?.querySelector?.(CONTENT_DETAIL_SELECTOR));
+  }
+
   function hasForbiddenPopupText(element) {
     const text = String(element?.textContent || '')
       .replace(/\s+/g, ' ')
@@ -306,6 +324,7 @@
     ) {
       return false;
     }
+    if (containsContentDetail(element) || element.closest?.(CONTENT_DETAIL_SELECTOR)) return false;
 
     if (!hasForbiddenPopupText(element)) return false;
 
@@ -1129,6 +1148,7 @@
       for (const element of matches) {
         const replacementRoot = currentReplacementRoot();
         if (element === replacementRoot || element.contains?.(replacementRoot)) continue;
+        if (containsContentDetail(element)) continue;
         removeElement(element);
       }
       return matches.size;
