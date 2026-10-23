@@ -94,6 +94,28 @@ function supportsDepthNavigationBG(url, highRiskDomains) {
   );
 }
 
+// 仅绑定页面搜索打开的结果文档；地址栏的新导航不能继承搜索词豁免。
+async function getPageSearchContextBG(sender, navigationType) {
+  if (!['navigate', 'reload', 'back_forward'].includes(navigationType)) return null;
+  const storage = chrome.storage?.session;
+  const tabId = sender.tab?.id;
+  if (!storage || !Number.isInteger(tabId) || sender.frameId !== 0) return null;
+  const key = `mySearchKeywordNavigation:${tabId}`;
+  const context = (await storage.get(key))[key];
+  if (!context) return null;
+  if (context.targetUrl !== sender.url ||
+    (context.documentId && context.documentId !== sender.documentId && navigationType !== 'reload')) {
+    await storage.remove(key);
+    return null;
+  }
+  if (!sender.documentId) return null;
+  if (context.documentId !== sender.documentId) {
+    context.documentId = sender.documentId;
+    await storage.set({ [key]: context });
+  }
+  return context;
+}
+
 function findBlockingSearchMatchBG(keyword, targetUrl, rules) {
   return MySearchBlockingRules.findSearchMatch(keyword, targetUrl, rules);
 }
@@ -271,10 +293,24 @@ async function openSearchResultBG(sender, keyword, targetUrl) {
     ? await startSearchSessionBG(sender, parsedUrl.href)
     : { enabled: false };
   const tab = await chrome.tabs.create({
-    url: parsedUrl.href,
+    url: normalizedKeyword && chrome.storage?.session ? 'about:blank' : parsedUrl.href,
     active: true,
     openerTabId,
   });
+  if (normalizedKeyword && chrome.storage?.session && Number.isInteger(tab?.id)) {
+    // 在结果页启动前写入来源，消除 document_start 读取规则的竞态。
+    const key = `mySearchKeywordNavigation:${tab.id}`;
+    try {
+      await chrome.storage.session.set({
+        [key]: { keyword: normalizedKeyword, targetUrl: parsedUrl.href, documentId: '' },
+      });
+      await chrome.tabs.update(tab.id, { url: parsedUrl.href });
+    } catch (error) {
+      await chrome.storage.session.remove(key);
+      await chrome.tabs.remove(tab.id);
+      throw error;
+    }
+  }
   return {
     opened: true,
     blocked: false,
@@ -391,6 +427,7 @@ if (chrome.tabs?.onCreated) {
 
 if (chrome.tabs?.onRemoved) {
   chrome.tabs.onRemoved.addListener(tabId => {
+    void chrome.storage?.session?.remove(`mySearchKeywordNavigation:${tabId}`);
     void mutateSearchSessionsBG(state => {
       const context = state.tabs[String(tabId)];
       if (!context) return;
@@ -1194,7 +1231,8 @@ async function handleMessage(message, sender, sendResponse) {
       }
 
       case 'GET_BLOCKING_RULES': {
-        sendResponse({ success: true, rules: { ...await getBlockingRulesBG(), homepageRules: await getUARulesBG() } });
+        const pageSearchContext = await getPageSearchContextBG(sender, message.navigationType);
+        sendResponse({ success: true, rules: { ...await getBlockingRulesBG(), homepageRules: await getUARulesBG(), pageSearchContext } });
         break;
       }
 

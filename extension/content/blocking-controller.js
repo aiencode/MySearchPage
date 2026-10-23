@@ -1842,10 +1842,14 @@
   }
 
   function findUrlMatch(rawUrl, includeHomepage = true) {
-    const direct = rulesApi.findUrlPattern(rawUrl, rules.blockedUrlPatterns);
-    if (direct) return direct;
     const absolute = absoluteUrl(rawUrl);
-    return rulesApi.findUrlPattern(absolute, rules.blockedUrlPatterns) ||
+    const context = rules.pageSearchContext;
+    const fromPageSearch = context?.targetUrl === absolute;
+    const candidate = fromPageSearch
+      ? rulesApi.searchUrlForRules(context.keyword, absolute) : rawUrl;
+    const direct = rulesApi.findUrlPattern(candidate, rules.blockedUrlPatterns);
+    if (direct) return direct;
+    return rulesApi.findUrlPattern(fromPageSearch ? candidate : absolute, rules.blockedUrlPatterns) ||
       (includeHomepage ? rulesApi.findBlockedHomepage(absolute, rules.highRiskDomains, rules.homepageRules) : null);
   }
 
@@ -2783,6 +2787,7 @@
     restoreBlockedCards();
     rules = rulesApi.normalizeRules(nextRules);
     rules.homepageRules = nextRules?.homepageRules;
+    rules.pageSearchContext = nextRules?.pageSearchContext;
     rulesLoaded = true;
     if (blockingEnabled !== true && !rules.homepageRules) return;
     currentUrlPattern = null;
@@ -2798,6 +2803,7 @@
   async function loadBlockingRules() {
     const response = await sendMessage({
       type: 'GET_BLOCKING_RULES',
+      navigationType: global.performance?.getEntriesByType?.('navigation')?.[0]?.type,
     });
     if (response?.success === true && response.rules) {
       return response.rules;

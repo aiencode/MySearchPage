@@ -305,12 +305,40 @@
     return '';
   }
 
+  // 页面搜索生成的词值不属于 URL 规则；域名、固定路径和其他参数仍参与匹配。
+  function searchUrlForRules(keyword, targetUrl, baseUrl) {
+    const text = String(keyword || '').trim();
+    if (!text) return targetUrl;
+    let url;
+    try {
+      url = new URL(targetUrl, baseUrl);
+    } catch (error) {
+      return targetUrl;
+    }
+    if (!['http:', 'https:'].includes(url.protocol)) return targetUrl;
+    const isKeyword = (value, formEncoded = false) => {
+      try {
+        return decodeURIComponent(formEncoded ? value.replace(/\+/g, ' ') : value) === text;
+      } catch (error) {
+        return false;
+      }
+    };
+    const path = url.pathname.split('/').map(part => isKeyword(part) ? '' : part).join('/');
+    const query = url.search.slice(1).split('&').map(pair => {
+      const equals = pair.indexOf('=');
+      return equals >= 0 && isKeyword(pair.slice(equals + 1), true)
+        ? pair.slice(0, equals + 1) : pair;
+    }).join('&');
+    const hash = isKeyword(url.hash.slice(1)) ? '' : url.hash;
+    return `${url.origin}${path}${url.search ? `?${query}` : ''}${hash}`;
+  }
+
   function findSearchMatch(keyword, targetUrl, rules, baseUrl) {
     const texts = [String(keyword || '').trim(), searchTextFromUrl(targetUrl, baseUrl)];
     for (const value of normalizeList(rules.blockedKeywords)) {
       if (texts.some(text => findKeyword(text, [value]))) return { kind: 'keyword', value };
     }
-    const value = findUrlPattern(targetUrl, rules.blockedUrlPatterns) ||
+    const value = findUrlPattern(searchUrlForRules(keyword, targetUrl, baseUrl), rules.blockedUrlPatterns) ||
       findBlockedHomepage(targetUrl, rules.highRiskDomains, rules.homepageRules);
     return value ? { kind: 'url', value } : null;
   }
@@ -416,6 +444,7 @@
     searchSiteForUrl,
     isSearchUrl,
     searchTextFromUrl,
+    searchUrlForRules,
     findSearchMatch,
     findBlockedHomepage,
     homepageDomain,
