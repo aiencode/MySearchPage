@@ -48,6 +48,7 @@ document.addEventListener('DOMContentLoaded', () => {
   let currentUaRules = {};
   let currentSiteConfig = emptySiteConfig();
   let draggedTableRow = null;
+  let siteDeletionQueue = Promise.resolve();
 
   function emptySiteConfig() {
     return { siteUrls: {}, buttonConfig: [], siteFlags: {} };
@@ -232,6 +233,28 @@ document.addEventListener('DOMContentLoaded', () => {
     return input;
   }
 
+  function deleteSiteRows(rows) {
+    const operation = siteDeletionQueue.then(async () => {
+      const targets = rows.filter((row) => row.parentNode === sitesTableBody);
+      if (!targets.length) return;
+      const sites = new Set(targets.map((row) => row.dataset.originalSite).filter(Boolean));
+      if (sites.size) {
+        const config = await readSiteConfig();
+        for (const site of sites) {
+          delete config.siteUrls[site];
+          delete config.siteFlags[site];
+        }
+        config.buttonConfig = config.buttonConfig.filter((button) => !sites.has(button.dataSite || button.datasite));
+        await writeSiteConfig(config);
+      }
+      for (const row of targets) row.remove();
+      if (sites.size) await publishSiteConfigChanged();
+      showToast('网站已删除');
+    });
+    siteDeletionQueue = operation.catch(() => {});
+    return operation;
+  }
+
   function createSiteRow({ site = '', url = '', button = {}, flags = {} }) {
     const row = document.createElement('tr');
     row.className = 'draggable-row';
@@ -262,7 +285,7 @@ document.addEventListener('DOMContentLoaded', () => {
     removeButton.type = 'button';
     removeButton.className = 'delete-btn';
     removeButton.textContent = '删除';
-    removeButton.addEventListener('click', () => row.remove());
+    removeButton.addEventListener('click', () => deleteSiteRows([row]).catch((error) => showToast('删除失败: ' + error.message)));
     actionCell.appendChild(removeButton);
     row.appendChild(actionCell);
     row.addEventListener('click', (event) => {
@@ -437,6 +460,10 @@ document.addEventListener('DOMContentLoaded', () => {
   async function saveSiteSettings(showConfirmation = true) {
     await applyDomainRulesFromSites({ preferCurrent: true });
     const config = await writeSiteConfig(configFromTable());
+    for (const row of Array.from(sitesTableBody.querySelectorAll('tr'))) {
+      const site = row.querySelector('td:nth-child(2) input')?.value.trim();
+      if (Object.prototype.hasOwnProperty.call(config.siteUrls, site)) row.dataset.originalSite = site;
+    }
     await publishSiteConfigChanged();
     if (showConfirmation) showToast('网站配置已保存');
     return config;
@@ -755,7 +782,9 @@ document.addEventListener('DOMContentLoaded', () => {
   settingsSearch.addEventListener('input', applySettingsFilter);
   addSiteRow.addEventListener('click', () => sitesTableBody.appendChild(createSiteRow({ flags: { mode: SITE_MODES.NO_BLANK, desktopMode: true } })));
   deleteSelectedRows.addEventListener('click', () => {
-    for (const row of Array.from(sitesTableBody?.querySelectorAll('tr.selected') || [])) row.remove();
+    const rows = Array.from(sitesTableBody.querySelectorAll('tr.selected'));
+    if (!rows.length) { showToast('请选择要删除的网站'); return; }
+    return deleteSiteRows(rows).catch((error) => showToast('删除失败: ' + error.message));
   });
   toggleContext.addEventListener('click', toggleSelectedContextMenus);
   toggleRequire.addEventListener('click', cycleSelectedModes);

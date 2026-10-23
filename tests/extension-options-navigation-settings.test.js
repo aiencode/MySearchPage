@@ -1196,3 +1196,121 @@ test('TC-OPTIONS-011 real save/import publish a signal consumed by open navigati
   assert.deepEqual(navigation.buttons().map((item) => item.site), ['bilibili', 'bilibili-history']);
   assert.equal(navigation.buttons()[0].url, 'https://imported.example/?q=');
 });
+
+test('TC-DELETE-SITE-001 single delete persists immediately and updates open navigation', async () => {
+  const app = await startOptions();
+  const navigation = await startNavigationConsumer(app);
+  const row = rowValues(app.document)[0].row;
+  await row.querySelector('.delete-btn').click();
+  for (let index = 0; index < 6; index += 1) await settle();
+  const saved = app.idb.records.get('main').data;
+  assert.equal(Object.hasOwn(saved.siteUrls, 'bilibili-history'), false);
+  assert.equal(Object.hasOwn(saved.siteFlags, 'bilibili-history'), false);
+  assert.deepEqual(saved.buttonConfig.map((button) => button.dataSite), ['bilibili']);
+  assert.deepEqual(navigation.buttons().map((button) => button.site), ['bilibili']);
+  const reopened = await startOptions({ persistent: app });
+  assert.deepEqual(rowValues(reopened.document).map((item) => item.dataSite), ['bilibili']);
+  assert.equal(app.messages.some((message) => message.type === 'UPDATE_RULE' || message.type === 'DELETE_RULE'), false,
+    'removing a navigation entry must not change independent UA/homepage rules');
+});
+
+test('TC-DELETE-SITE-002 batch deletion persists an empty list without restoring defaults', async () => {
+  const app = await startOptions();
+  const navigation = await startNavigationConsumer(app);
+  for (const { row } of rowValues(app.document)) row.classList.add('selected');
+  const search = app.document.getElementById('settings-search');
+  search.value = 'history';
+  await search.dispatchEvent({ type: 'input' });
+  await app.document.getElementById('delete-selected-rows').click();
+  for (let index = 0; index < 6; index += 1) await settle();
+  assert.deepEqual(app.idb.records.get('main').data, { siteUrls: {}, buttonConfig: [], siteFlags: {} });
+  assert.equal(rowValues(app.document).length, 0);
+  assert.equal(navigation.buttons().length, 0);
+  const reopened = await startOptions({ persistent: app });
+  assert.equal(rowValues(reopened.document).length, 0);
+});
+
+test('TC-DELETE-SITE-003 delete uses original identity and does not save unrelated draft edits', async () => {
+  const app = await startOptions();
+  const [removed, retained] = rowValues(app.document);
+  removed.row.querySelector('td:nth-child(2) input').value = 'unsaved-rename';
+  retained.row.querySelector('td:nth-child(3) input').value = 'https://unsaved.example/';
+  await removed.row.querySelector('.delete-btn').click();
+  const saved = app.idb.records.get('main').data;
+  assert.equal(Object.hasOwn(saved.siteUrls, 'bilibili-history'), false);
+  assert.equal(saved.siteUrls.bilibili, sampleConfig().siteUrls.bilibili);
+  assert.equal(retained.row.querySelector('td:nth-child(3) input').value, 'https://unsaved.example/');
+  await app.document.getElementById('save-settings').click();
+  for (let index = 0; index < 6; index += 1) await settle();
+  assert.equal(app.idb.records.get('main').data.siteUrls.bilibili, 'https://unsaved.example/');
+});
+
+test('TC-DELETE-SITE-004 deleting a new unsaved row leaves persisted configuration untouched', async () => {
+  const app = await startOptions();
+  const before = clone(app.idb.records.get('main'));
+  await app.document.getElementById('add-site-row').click();
+  const row = rowValues(app.document).at(-1).row;
+  row.querySelector('td:nth-child(2) input').value = 'draft-site';
+  row.querySelector('td:nth-child(3) input').value = 'https://draft.example/';
+  await row.querySelector('.delete-btn').click();
+  assert.equal(rowValues(app.document).length, 2);
+  assert.deepEqual(app.idb.records.get('main'), before);
+});
+
+test('TC-DELETE-SITE-005 rapid consecutive deletions cannot restore a previously deleted entry', async () => {
+  const app = await startOptions();
+  await Promise.all(rowValues(app.document).map(({ row }) => row.querySelector('.delete-btn').click()));
+  for (let index = 0; index < 6; index += 1) await settle();
+  assert.deepEqual(app.idb.records.get('main').data.siteUrls, {});
+  assert.equal(rowValues(app.document).length, 0);
+});
+
+test('TC-DELETE-SITE-006 database failure reports an error and keeps the site row', async () => {
+  const app = await startOptions();
+  const before = clone(app.idb.records.get('main'));
+  app.idb.api.open = () => {
+    const request = { error: new Error('测试数据库不可用') };
+    setImmediate(() => request.onerror?.());
+    return request;
+  };
+  await rowValues(app.document)[0].row.querySelector('.delete-btn').click();
+  for (let index = 0; index < 6; index += 1) await settle();
+  assert.equal(rowValues(app.document).length, 2);
+  assert.deepEqual(app.idb.records.get('main'), before);
+  assert.match(app.document.querySelector('.toast')?.textContent || '', /删除失败/);
+});
+
+test('TC-DELETE-SITE-007 sites saved after adding or renaming can be deleted immediately', async (t) => {
+  for (const operation of ['add', 'rename']) {
+    await t.test(operation, async () => {
+      const app = await startOptions();
+      if (operation === 'add') await app.document.getElementById('add-site-row').click();
+      const row = rowValues(app.document).at(-1).row;
+      row.querySelector('td:nth-child(2) input').value = 'saved-site';
+      row.querySelector('td:nth-child(3) input').value = 'https://saved.example/';
+      await app.document.getElementById('save-settings').click();
+      for (let index = 0; index < 6; index += 1) await settle();
+      assert.equal(app.idb.records.get('main').data.siteUrls['saved-site'], 'https://saved.example/');
+      await row.querySelector('.delete-btn').click();
+      assert.equal(Object.hasOwn(app.idb.records.get('main').data.siteUrls, 'saved-site'), false);
+      assert.equal(row.parentNode, null);
+    });
+  }
+});
+
+test('TC-DELETE-SITE-008 a failed deletion can be retried after the database recovers', async () => {
+  const app = await startOptions();
+  const open = app.idb.api.open;
+  app.idb.api.open = () => {
+    const request = { error: new Error('测试数据库不可用') };
+    setImmediate(() => request.onerror?.());
+    return request;
+  };
+  const row = rowValues(app.document)[0].row;
+  await row.querySelector('.delete-btn').click();
+  assert.equal(rowValues(app.document).length, 2);
+  app.idb.api.open = open;
+  await row.querySelector('.delete-btn').click();
+  assert.equal(Object.hasOwn(app.idb.records.get('main').data.siteUrls, 'bilibili-history'), false);
+  assert.equal(rowValues(app.document).length, 1);
+});
